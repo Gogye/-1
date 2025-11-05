@@ -1,0 +1,10 @@
+streamlit
+pandas
+numpy
+finance-datareader
+yfinance
+matplotlib
+koreanize-matplotlib
+scipy
+ta
+seaborn

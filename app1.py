@@ -3,10 +3,17 @@ import pandas as pd
 import numpy as np
 import FinanceDataReader as fdr
 import matplotlib.pyplot as plt
-import koreanize_matplotlib  # 한글 깨짐 방지
 from scipy.signal import savgol_filter
 import math
-import ta  # 노트북에서 import했으므로 포함 (현재 로직에서는 사용되지 않음)
+import altair as alt
+
+pinpoints_df = pd.DataFrame({
+    'Date': ['2024-06-05', '2024-10-10'],
+    'Event': ['Vision Pro 발표', '신제품 출시'],
+    'Content': ['Apple이 Vision Pro를 발표했습니다.', 'Apple이 새로운 제품을 출시했습니다.'],
+    'Link': ['https://www.apple.com/newsroom/2024/06/apple-unveils-vision-pro-revolutionary-spatial-computing-platform/',
+             'https://www.apple.com/newsroom/2024/10/apple-announces-new-products/']
+})
 
 # ----------------------------------------------------------------------
 # 1. 데이터 로딩 함수 (캐싱 적용)
@@ -26,11 +33,8 @@ def load_data(ticker, start_date, end_date):
     except Exception as e:
         st.error(f"데이터 로딩 중 오류 발생: {e}")
         return None
-
 # ----------------------------------------------------------------------
 # 2. 노트북의 알고리즘 함수들 (ipynb 파일 내용 그대로)
-# ----------------------------------------------------------------------
-
 # --- 2-1. 스무딩 & 초기 Phase (Cell 4) ---
 def apply_smoothing_and_phase(df, window_length, polyorder):
     df = df.copy()
@@ -202,7 +206,7 @@ def detect_market_phases(df, window_length, polyorder, min_days1, min_days2, adj
     
     # 4. 전환점 보정
     df_result = adjust_change_points(df_result, adjust_window)
-    
+
     # 5. 짧은 구간 병합 (2차)
     df_result = merge_short_phases(df_result, min_days2)
     
@@ -211,41 +215,125 @@ def detect_market_phases(df, window_length, polyorder, min_days1, min_days2, adj
 # ----------------------------------------------------------------------
 # 4. 시각화 함수 (Cell 3 수정)
 # ----------------------------------------------------------------------
-def visualize_phases_streamlit(df):
+def visualize_phases_altair_all_interactions(df, pinpoints_df=None):
     """
-    Streamlit에 Matplotlib 차트를 그리기 위한 함수
-    plt.show() 대신 fig 객체를 반환합니다.
+    Altair의 4가지 주요 상호작용을 모두 포함하는 차트를 생성합니다.
+    1. 툴팁 (Tooltip)
+    2. 하이라이트 (Highlight on Mouseover)
+    3. 선택 (Selection on Click)
+    4. 브러시 & 필터 (Interval Brush & Cross-filtering)
     """
-    fig, ax = plt.subplots(figsize=(14, 6))
-    ax.plot(df.index, df["Close"], color="gray", linewidth=2, label="실제 종가")
     
-    # 스무딩 곡선이 있으면 함께 표시
-    if "Smooth" in df.columns:
-        ax.plot(df.index, df["Smooth"], color="black", alpha=0.5, linestyle='--', label="스무딩 곡선")
+    # --- 1. 데이터 준비 ---
+    if df.empty:
+        return alt.Chart(pd.DataFrame()).mark_text().properties(
+            title="데이터가 없습니다."
+        )
+    df_reset = df.reset_index().rename(columns={'index': 'Date'})
 
-    colors = {"상승": "green", "하락": "red", '박스권': 'blue'}
+    # ❗️ [추가] Y축 하위 5% 위치의 '가격' 값을 계산합니다.
+    min_price = df_reset['Close'].min()
+    max_price = df_reset['Close'].max()
+    price_range = max_price - min_price
     
-    if "Phase" not in df.columns or df.empty:
-        ax.set_title("데이터가 부족하거나 Phase가 계산되지 않았습니다.")
-        return fig
+    # Y축 하위 5%에 해당하는 실제 가격 값
+    target_y_value = min_price + (price_range * 0.001)
+    
+    # --- 2. (배경) Phase 블록 계산 (이전과 동일) ---
+    background = alt.Chart(pd.DataFrame()).mark_text()
+    phase_blocks_empty = True 
 
-    current_phase = df["Phase"].iloc[0]
-    start_idx = 0
+    if "Phase" in df_reset.columns and not df_reset['Phase'].isnull().all():
+        df_phases = df_reset[['Date', 'Phase']].copy()
+        df_phases['Phase'] = df_phases['Phase'].fillna('N/A')
+        df_phases['New_Block'] = df_phases['Phase'] != df_phases['Phase'].shift(1)
+        df_phases['Block_ID'] = df_phases['New_Block'].cumsum()
+        
+        phase_blocks = df_phases.groupby('Block_ID').agg(
+            start_date=('Date', 'min'), end_date=('Date', 'max'), Phase=('Phase', 'first')
+        ).reset_index()
+        phase_blocks = phase_blocks[phase_blocks['Phase'] != 'N/A']
+        
+        if not phase_blocks.empty:
+            phase_blocks_empty = False
+            background = alt.Chart(phase_blocks).mark_rect(opacity=0.15).encode(
+                x=alt.X('start_date:T', title='날짜'), x2=alt.X2('end_date:T'),
+                color=alt.Color('Phase:N', legend=alt.Legend(title='추세', orient='top')),
+                tooltip=['start_date:T', 'end_date:T', 'Phase:N']
+            )
 
-    for i in range(1, len(df)):
-        if df["Phase"].iloc[i] != current_phase:
-            ax.axvspan(df.index[start_idx], df.index[i],
-                       color=colors.get(current_phase, 'grey'), alpha=0.15) # get으로 안전하게 색상 가져오기
-            start_idx = i
-            current_phase = df["Phase"].iloc[i]
+    # --- 3. (전경) 선 그래프 (이전과 동일) ---
+    line_chart = alt.Chart(df_reset).mark_line(color='gray').encode(
+        x=alt.X('Date:T', title='날짜'),
+        y=alt.Y('Close:Q', title='가격', scale=alt.Scale(zero=False)),
+        tooltip=['Date:T', 'Close:Q']
+    )
+    # --- 4. (중요) 상호작용 셀렉터(Selector) 정의 ---
+    
+    # 핀포인트 위 '마우스 오버' 감지 (하이라이트용)
+    hover_selection = alt.selection_point(
+        on='mouseover', empty='all', fields=['Date']
+    )
 
-    # 마지막 구간 색칠
-    ax.axvspan(df.index[start_idx], df.index[-1],
-               color=colors.get(current_phase, 'grey'), alpha=0.15)
+    # --- 5. (옵션) 핀포인트 레이어 생성 (모든 상호작용 적용) ---
+    pinpoint_layer = alt.Chart(pd.DataFrame()).mark_text()
 
-    ax.set_title("알고리즘 기반 주가 추세 구간 시각화")
-    ax.legend()
-    return fig
+    if pinpoints_df is not None and not pinpoints_df.empty:
+        # (데이터 병합 로직은 이전과 동일)
+        pinpoints_df_copy = pinpoints_df.copy()
+        pinpoints_df_copy['Date'] = pd.to_datetime(pinpoints_df_copy['Date'])
+        merged_pins = pd.merge(
+            df_reset[['Date', 'Close']], pinpoints_df_copy, on='Date', how='inner'
+        )
+
+        if not merged_pins.empty:
+            # 수직선
+            rule = alt.Chart(merged_pins).mark_rule(
+                color='black', strokeDash=[3, 3]
+            ).encode(x='Date:T')
+
+            # 핀포인트 (점) - 모든 상호작용이 여기에 적용됨
+            points = alt.Chart(merged_pins).mark_point(
+                filled=True,
+                stroke='black',
+                strokeWidth=0.5
+            ).transform_calculate(
+                pin_y_position=f"{target_y_value}"  # 계산된 Y 위치 사용
+            ).encode(
+                x='Date:T',
+                y=alt.Y('pin_y_position:Q', title='가격'),
+                
+                # 1. 툴팁 (Tooltip): 마우스 오버 시 정보 표시
+                tooltip=[
+                    alt.Tooltip('Date:T', title='날짜', format='%Y-%m-%d'),
+                    alt.Tooltip('Event:N', title='이벤트')
+                    #,
+                    #alt.Tooltip('Close:Q', title='종가', format=',.2f')
+                ],
+                
+                # 2. 하이라이트 (Highlight): 마우스 오버 시 크기 변경
+                size=alt.condition(hover_selection, 
+                                 alt.value(200),alt.value(100)  # 마우스 올리면 200, 평상시 100
+                )
+            ).add_params(hover_selection)
+            
+            pinpoint_layer = rule + points
+
+    # --- 6. [위] 메인 차트 조립 ---
+    if phase_blocks_empty:
+        base_chart = line_chart
+    else:
+        base_chart = background + line_chart
+    target_y_df = pd.DataFrame({'target_y': [target_y_value]})
+    base_line = alt.Chart(target_y_df).mark_rule(
+        color='black', opacity=0
+    ).encode(y='target_y:Q')
+    main_chart = (base_chart + pinpoint_layer + base_line).properties(
+        height=400
+    )
+    
+    return main_chart
+
 
 # ----------------------------------------------------------------------
 # 5. Streamlit 앱 메인 로직
@@ -253,68 +341,97 @@ def visualize_phases_streamlit(df):
 st.set_page_config(layout="wide") # 페이지를 넓게 사용
 st.title("주가 추세 구간화 알고리즘 (구간화 알고리즘_최종1차)")
 
-# --- 사이드바: 사용자 입력 ---
-st.sidebar.header("📈 조회 설정")
-ticker = st.sidebar.text_input("종목 코드 (예: 005930)", "005930")
-start_date = st.sidebar.date_input("시작일", pd.to_datetime("2024-01-01"))
-end_date = st.sidebar.date_input("종료일", pd.to_datetime("2024-12-31"))
+cols = st.columns([1, 3])
 
-st.sidebar.header("⚙️ 알고리즘 파라미터")
-# 노트북 Cell 7의 파라미터들
-window_length = st.sidebar.slider("스무딩 윈도우 (홀수)", 3, 21, 5, step=2)
-polyorder = st.sidebar.slider("스무딩 다항식 차수", 1, 5, 3)
-min_days1 = st.sidebar.slider("초기 짧은 구간 병합 일수", 1, 10, 2)
-min_days2 = st.sidebar.slider("최종 짧은 구간 병합 일수", 1, 10, 2)
-adjust_window = st.sidebar.slider("전환점 보정 윈도우", 1, 10, 2)
-min_hits = st.sidebar.slider("박스권 최소 교차 횟수", 1, 20, 9)
-box_window = st.sidebar.slider("박스권 판정 윈도우", 1, 20, 10)
+left_cell = cols[0].container(
+    border=True, height="stretch", vertical_alignment="center"
+)
 
 
-# --- 메인 패널: 결과 출력 ---
-if ticker:
-    # 1. 데이터 로드
-    df_raw = load_data(ticker, start_date, end_date)
+STOCKS = [
+    "005930",
+    "000270",
+    "005932",
+]
+DEFAULT_STOCKS = ["005930"]
+
+def stocks_to_str(stocks):
+    return ",".join(stocks)
+
+if "tickers_input" not in st.session_state:
+    st.session_state.tickers_input = st.query_params.get(
+        "stocks", stocks_to_str(DEFAULT_STOCKS)
+    ).split(",")
+
+all_options = sorted(set(STOCKS) | set(st.session_state.tickers_input))
+default_ticker = "005930"
+if st.session_state.tickers_input:
+    default_ticker = st.session_state.tickers_input[0] # 리스트의 첫 번째 값
+try:
+    default_index = all_options.index(default_ticker)
+except ValueError:
+    default_index = 0 # 기본값이 옵션에 없으면 0번째(첫 번째) 항목 선택
     
-    if df_raw is not None and not df_raw.empty:
-        st.subheader(f"'{ticker}' 원본 데이터 (최근 5일)")
-        st.dataframe(df_raw.tail(), use_container_width=True)
+with left_cell:
+    st.markdown("### 주가 구간화 알고리즘")
+    # --- 사이드바: 사용자 입력 ---
+    ticker = st.selectbox(
+        "종목 선택",
+        options=all_options,
+        index=all_options.index(st.session_state.tickers_input[0]),
+        placeholder="종목 코드를 입력하세요 (예: 005930)"
+    )
+    with st.expander("### 📈 기간 설정"):
+        start_date = st.date_input("시작일", pd.to_datetime("2024-01-01"))
+        end_date = st.date_input("종료일", pd.to_datetime("2024-12-31"))
 
-        # 2. 알고리즘 실행
-        if len(df_raw) < window_length:
-            st.warning(f"데이터가 스무딩 윈도우({window_length}일)보다 적습니다. 더 긴 기간을 선택하세요.")
-        else:
-            with st.spinner("구간화 알고리즘을 실행 중입니다..."):
-                df_processed = detect_market_phases(
-                    df_raw,
-                    window_length=window_length,
-                    polyorder=polyorder,
-                    min_days1=min_days1,
-                    min_days2=min_days2,
-                    adjust_window=adjust_window,
-                    min_hits=min_hits,
-                    box_window=box_window
-                )
-            
-            # 3. 시각화
-            st.subheader("구간화 분석 결과 차트")
-            fig = visualize_phases_streamlit(df_processed)
-            st.pyplot(fig, use_container_width=True)
-            
-            # 4. 데이터 표시
-            st.subheader("구간화 상세 데이터")
-            st.dataframe(df_processed, use_container_width=True)
-            
-            # 5. 다운로드 버튼
-            @st.cache_data
-            def convert_df_to_csv(df):
-                return df.to_csv(index=True, encoding='utf-8-sig').encode('utf-8-sig')
+    with st.expander("### ⚙️ 구간화 파라미터"):
+        # 노트북 Cell 7의 파라미터들
+        window_length = st.number_input("스무딩 윈도우 (홀수)",min_value=3,max_value=21,value=5,step=2)
+        polyorder = st.slider("스무딩 다항식 차수", 1, 5, 3)
+        min_days1 = st.slider("초기 짧은 구간 병합 일수", 1, 10, 2)
+        min_days2 = st.slider("최종 짧은 구간 병합 일수", 1, 10, 2)
+        adjust_window = st.slider("전환점 보정 윈도우", 1, 10, 2)
+        min_hits = st.slider("박스권 최소 교차 횟수", 1, 20, 9)
+        box_window = st.slider("박스권 판정 윈도우", 1, 20, 10)
 
-            csv_data = convert_df_to_csv(df_processed)
-            st.download_button(
-                label="📈 결과 데이터 다운로드 (CSV)",
-                data=csv_data,
-                file_name=f"{ticker}_phase_analysis.csv",
-                mime="text/csv",
-            )
-else:
-    st.info("좌측 사이드바에서 종목 코드를 입력하고 기간을 설정해주세요.")
+
+right_cell = cols[1].container(
+    border=True, height="stretch", vertical_alignment="center"
+)
+
+
+with right_cell:
+    # --- 메인 패널: 결과 출력 ---
+    if ticker:
+        # 1. 데이터 로드
+        df_raw = load_data(ticker, start_date, end_date)
+        
+        if df_raw is not None and not df_raw.empty:
+            # 2. 알고리즘 실행
+            if len(df_raw) < window_length:
+                st.warning(f"데이터가 스무딩 윈도우({window_length}일)보다 적습니다. 더 긴 기간을 선택하세요.")
+            else:
+                with st.spinner("구간화 알고리즘을 실행 중입니다..."):
+                    df_processed = detect_market_phases(
+                        df_raw,
+                        window_length=window_length,
+                        polyorder=polyorder,
+                        min_days1=min_days1,
+                        min_days2=min_days2,
+                        adjust_window=adjust_window,
+                        min_hits=min_hits,
+                        box_window=box_window
+                    )
+                
+                # 3. 시각화
+                st.subheader("구간화 분석 결과 차트")
+                fig = visualize_phases_altair_all_interactions(df_processed, pinpoints_df=pinpoints_df)
+                st.altair_chart(fig, use_container_width=True)
+                
+                # 4. 뉴스 데이터 표시
+                st.subheader("뉴스 데이터")
+                st.dataframe(pinpoints_df, use_container_width=True)
+    else:
+        st.info("좌측 사이드바에서 종목 코드를 입력하고 기간을 설정해주세요.")
+

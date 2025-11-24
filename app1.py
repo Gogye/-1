@@ -6,6 +6,7 @@ import matplotlib.pyplot as plt
 from scipy.signal import savgol_filter
 import math
 import altair as alt
+import ta
 
 pinpoints_df = pd.DataFrame({
     'Date': ['2024-06-05', '2024-10-10'],
@@ -212,6 +213,41 @@ def detect_market_phases(df, window_length, polyorder, min_days1, min_days2, adj
     
     return df_result
 
+
+def display_metrics(df):
+    if len(df) < 2: return
+    latest = df.iloc[-1]
+    prev = df.iloc[-2]
+    
+    close_price = latest['Close']
+    price_diff = close_price - prev['Close']
+    pct_change = (price_diff / prev['Close']) * 100
+    volume = latest['Volume']
+    rsi = ta.momentum.RSIIndicator(df['Close'], window=14).rsi().iloc[-1]
+    high_52w = df['Close'][-250:].max() if len(df) > 250 else df['Close'].max()
+    
+    m1, m2, m3, m4 = st.columns(4)
+    with m1: st.metric(label="현재 주가", value=f"{close_price:,.0f} 원", delta=f"{price_diff:,.0f} 원 ({pct_change:+.2f}%)")
+    with m2: st.metric(label="거래량", value=f"{volume:,.0f} 주")
+    with m3: st.metric(label="RSI (14일)", value=f"{rsi:.2f}")
+    with m4: st.metric(label="52주 최고가", value=f"{high_52w:,.0f} 원")
+    st.divider()
+
+# --- [새로 추가] 캔들스틱 차트 함수 ---
+def visualize_candlestick(df):
+    df_reset = df.reset_index().rename(columns={'index': 'Date'})
+    base = alt.Chart(df_reset).encode(x=alt.X('Date:T', axis=alt.Axis(format='%Y-%m-%d', title='날짜')))
+    rule = base.mark_rule().encode(
+        y=alt.Y('Low:Q', scale=alt.Scale(zero=False), title='주가'), y2='High:Q',
+        color=alt.condition("datum.Open <= datum.Close", alt.value("#ff0000"), alt.value("#0000ff"))
+    )
+    bar = base.mark_bar(width=5).encode(
+        y='Open:Q', y2='Close:Q',
+        color=alt.condition("datum.Open <= datum.Close", alt.value("#ff0000"), alt.value("#0000ff")),
+        tooltip=['Date:T', 'Open', 'High', 'Low', 'Close', 'Volume']
+    )
+    return (rule + bar).properties(height=300, title="일봉 캔들 차트")
+
 # ----------------------------------------------------------------------
 # 4. 시각화 함수 (Cell 3 수정)
 # ----------------------------------------------------------------------
@@ -401,37 +437,49 @@ right_cell = cols[1].container(
 )
 
 
-with right_cell:
+with right_cell:  
     # --- 메인 패널: 결과 출력 ---
     if ticker:
         # 1. 데이터 로드
         df_raw = load_data(ticker, start_date, end_date)
         
         if df_raw is not None and not df_raw.empty:
-            # 2. 알고리즘 실행
-            if len(df_raw) < window_length:
-                st.warning(f"데이터가 스무딩 윈도우({window_length}일)보다 적습니다. 더 긴 기간을 선택하세요.")
-            else:
-                with st.spinner("구간화 알고리즘을 실행 중입니다..."):
-                    df_processed = detect_market_phases(
-                        df_raw,
-                        window_length=window_length,
-                        polyorder=polyorder,
-                        min_days1=min_days1,
-                        min_days2=min_days2,
-                        adjust_window=adjust_window,
-                        min_hits=min_hits,
-                        box_window=box_window
-                    )
-                
-                # 3. 시각화
-                st.subheader("구간화 분석 결과 차트")
-                fig = visualize_phases_altair_all_interactions(df_processed, pinpoints_df=pinpoints_df)
-                st.altair_chart(fig, use_container_width=True)
-                
-                # 4. 뉴스 데이터 표시
-                st.subheader("뉴스 데이터")
-                st.dataframe(pinpoints_df, use_container_width=True)
+            # [NEW] 상단 주요 지표 대시보드 표시
+            display_metrics(df_raw)
+            
+            # [NEW] 탭 구성 (기본 차트 vs 알고리즘 분석)
+            tab1, tab2 = st.tabs(["📈 기본 시세", "🧠 AI 추세 분석"])
+            
+            # 탭 1: 캔들스틱 차트 (새로 추가된 기능)
+            with tab1:
+                candle_chart = visualize_candlestick(df_raw)
+                st.altair_chart(candle_chart, use_container_width=True)
+                st.subheader("일별 시세 데이터")
+                st.dataframe(df_raw.sort_index(ascending=False).head(5), use_container_width=True)
+
+            # 탭 2: 기존 알고리즘 분석 (기존 기능 이동)
+            with tab2:
+                if len(df_raw) < window_length:
+                    st.warning(f"데이터 부족: 최소 {window_length}일 이상 필요합니다.")
+                else:
+                    with st.spinner("구간화 알고리즘을 실행 중입니다..."):
+                        df_processed = detect_market_phases(
+                            df_raw, window_length, polyorder, min_days1, min_days2, adjust_window, min_hits, box_window
+                        )
+                    
+                    st.subheader("구간화 분석 결과")
+                    fig = visualize_phases_altair_all_interactions(df_processed, pinpoints_df=pinpoints_df)
+                    st.altair_chart(fig, use_container_width=True)
+                    
+                    # 통계 요약 추가
+                    if "Phase" in df_processed.columns:
+                        counts = df_processed['Phase'].value_counts()
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric("상승 구간", f"{counts.get('상승', 0)}일")
+                        c2.metric("하락 구간", f"{counts.get('하락', 0)}일")
+                        c3.metric("박스권", f"{counts.get('박스권', 0)}일")
+                    
+                    st.subheader("관련 뉴스 이벤트")
+                    st.dataframe(pinpoints_df, use_container_width=True, hide_index=True)
     else:
         st.info("좌측 사이드바에서 종목 코드를 입력하고 기간을 설정해주세요.")
-

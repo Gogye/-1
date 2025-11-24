@@ -233,20 +233,41 @@ def display_metrics(df):
     with m4: st.metric(label="52주 최고가", value=f"{high_52w:,.0f} 원")
     st.divider()
 
-# --- [새로 추가] 캔들스틱 차트 함수 ---
 def visualize_candlestick(df):
     df_reset = df.reset_index().rename(columns={'index': 'Date'})
-    base = alt.Chart(df_reset).encode(x=alt.X('Date:T', axis=alt.Axis(format='%Y-%m-%d', title='날짜')))
-    rule = base.mark_rule().encode(
-        y=alt.Y('Low:Q', scale=alt.Scale(zero=False), title='주가'), y2='High:Q',
+    
+    # [핵심 해결책] 캔들 너비를 '픽셀'이 아닌 '시간 간격'으로 정의합니다.
+    # 하루(24시간) 중 약 18시간(±9시간)을 몸통 너비로 씁니다. 
+    # 이렇게 하면 줌 아웃할 때 캔들도 같이 얇아져서 절대 겹치지 않습니다.
+    df_reset['Date_start'] = df_reset['Date'] - pd.Timedelta(hours=9)
+    df_reset['Date_end']   = df_reset['Date'] + pd.Timedelta(hours=9)
+
+    # 1. 캔들 꼬리 (High-Low) 그리기 (얇은 선)
+    rule = alt.Chart(df_reset).mark_rule().encode(
+        x=alt.X('Date:T', axis=alt.Axis(format='%Y-%m-%d', title='날짜')),
+        y=alt.Y('Low:Q', scale=alt.Scale(zero=False), title='주가'),
+        y2='High:Q',
         color=alt.condition("datum.Open <= datum.Close", alt.value("#ff0000"), alt.value("#0000ff"))
     )
-    bar = base.mark_bar(width=5).encode(
-        y='Open:Q', y2='Close:Q',
+
+    # 2. 캔들 몸통 (Open-Close) 그리기 (사각형 영역)
+    # mark_bar 대신 mark_rect를 사용하여 시간 범위(Date_start ~ Date_end)를 채웁니다.
+    body = alt.Chart(df_reset).mark_rect().encode(
+        x='Date_start:T',
+        x2='Date_end:T',
+        y='Open:Q',
+        y2='Close:Q',
         color=alt.condition("datum.Open <= datum.Close", alt.value("#ff0000"), alt.value("#0000ff")),
         tooltip=['Date:T', 'Open', 'High', 'Low', 'Close', 'Volume']
     )
-    return (rule + bar).properties(height=300, title="일봉 캔들 차트")
+
+    # 차트 합치기 + 인터랙티브 기능
+    chart = (rule + body).properties(
+        height=300,
+        title="일봉 캔들 차트"
+    ).interactive()
+    
+    return chart
 
 # ----------------------------------------------------------------------
 # 4. 시각화 함수 (Cell 3 수정)

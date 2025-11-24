@@ -292,9 +292,23 @@ def visualize_phases_altair_all_interactions(df, pinpoints_df=None):
         
         if not phase_blocks.empty:
             phase_blocks_empty = False
-            background = alt.Chart(phase_blocks).mark_rect(opacity=0.15).encode(
-                x=alt.X('start_date:T', title='날짜'), x2=alt.X2('end_date:T'),
-                color=alt.Color('Phase:N', legend=alt.Legend(title='추세', orient='top')),
+            # -------------------------------------------------------
+            # [수정됨] 한국 주식 스타일 색상 적용 (상승=빨강, 하락=파랑)
+            # -------------------------------------------------------
+            
+            # 1. 어떤 구간인지 정의 (순서 중요!)
+            domain = ['상승', '하락', '박스권']
+            
+            # 2. 각 구간별 색상 지정 (은은한 파스텔톤)
+            # 상승(빨강) / 하락(파랑) / 박스권(회색)
+            range_ = ['#ff9999', '#aaccff', '#d9d9d9'] 
+
+            background = alt.Chart(phase_blocks).mark_rect(opacity=0.5).encode(
+                x=alt.X('start_date:T', title='날짜'), 
+                x2=alt.X2('end_date:T'),
+                color=alt.Color('Phase:N', 
+                                scale=alt.Scale(domain=domain, range=range_),  # <-- 이 부분이 새로 추가된 핵심입니다!
+                                legend=alt.Legend(title='추세 구간')),
                 tooltip=['start_date:T', 'end_date:T', 'Phase:N']
             )
 

@@ -269,6 +269,92 @@ def visualize_candlestick(df):
     
     return chart
 
+# --- [복구됨] 3. 기술적 지표 시각화 (NaN 처리 + 한국식 색상) ---
+def visualize_technical_indicators(df):
+    df = df.copy()
+    
+    # 데이터 길이 체크 (최소 30일)
+    if len(df) < 30:
+        return alt.Chart(pd.DataFrame({'text': ['데이터가 부족하여 지표를 계산할 수 없습니다. (최소 30일 이상 필요)']})).mark_text(size=20).encode(text='text')
+
+    # 1. 지표 계산
+    # 볼린저 밴드
+    indicator_bb = ta.volatility.BollingerBands(close=df["Close"], window=20, window_dev=2)
+    df['bb_h'] = indicator_bb.bollinger_hband()
+    df['bb_l'] = indicator_bb.bollinger_lband()
+    
+    # MACD
+    indicator_macd = ta.trend.MACD(close=df["Close"], window_slow=26, window_fast=12, window_sign=9)
+    df['macd'] = indicator_macd.macd()
+    df['macd_signal'] = indicator_macd.macd_signal()
+    df['macd_diff'] = indicator_macd.macd_diff()
+
+    # RSI
+    indicator_rsi = ta.momentum.RSIIndicator(close=df["Close"], window=14)
+    df['rsi'] = indicator_rsi.rsi()
+
+    # [중요] 빈 값(NaN) 제거
+    df_reset = df.dropna().reset_index().rename(columns={'index': 'Date'})
+    
+    if df_reset.empty:
+         return alt.Chart(pd.DataFrame({'text': ['유효한 데이터가 없습니다.']})).mark_text().encode(text='text')
+
+    # 2. 차트 그리기
+    base = alt.Chart(df_reset).encode(x=alt.X('Date:T', axis=alt.Axis(title=None, format='%Y-%m-%d')))
+
+    # (1) 볼린저 밴드
+    bb_line = base.mark_line(color='black', strokeWidth=1).encode(y=alt.Y('Close:Q', scale=alt.Scale(zero=False), title='주가'))
+    bb_band = base.mark_area(opacity=0.2, color='gray').encode(y='bb_l:Q', y2='bb_h:Q')
+    chart_bb = (bb_line + bb_band).properties(height=250, title="볼린저 밴드 (가격 변동폭)")
+
+    # (2) MACD (상승=빨강, 하락=파랑)
+    macd_line = base.mark_line(color='grey').encode(y='macd:Q')
+    sig_line = base.mark_line(color='orange').encode(y='macd_signal:Q')
+    hist_bar = base.mark_bar().encode(
+        y=alt.Y('macd_diff:Q', title='MACD Diff'),
+        color=alt.condition(alt.datum.macd_diff > 0, alt.value("#ff9999"), alt.value("#aaccff"))
+    )
+    chart_macd = (hist_bar + macd_line + sig_line).properties(height=150, title="MACD (추세 강도)")
+
+    # (3) RSI
+    rsi_line = base.mark_line(color='purple').encode(y=alt.Y('rsi:Q', scale=alt.Scale(domain=[0, 100]), title='RSI'))
+    rsi_rule_high = alt.Chart(pd.DataFrame({'y': [70]})).mark_rule(color='red', strokeDash=[3,3]).encode(y='y')
+    rsi_rule_low = alt.Chart(pd.DataFrame({'y': [30]})).mark_rule(color='blue', strokeDash=[3,3]).encode(y='y')
+    chart_rsi = (rsi_line + rsi_rule_high + rsi_rule_low).properties(height=150, title="RSI (과열/침체)")
+
+    return alt.vconcat(chart_bb, chart_macd, chart_rsi).resolve_scale(x='shared').interactive()
+
+# --- [복구됨] 4. 수익률 분석 시각화 ---
+def visualize_return_analysis(df):
+    df = df.copy()
+    # 수익률 계산
+    df['Daily_Ret'] = df['Close'].pct_change()
+    df['Cum_Ret'] = (1 + df['Daily_Ret']).cumprod() - 1
+    df_reset = df.dropna().reset_index().rename(columns={'index': 'Date'})
+
+    # (1) 누적 수익률 곡선
+    cum_chart = alt.Chart(df_reset).mark_area(
+        line={'color':'darkgreen'},
+        color=alt.Gradient(
+            gradient='linear',
+            stops=[alt.GradientStop(color='white', offset=0),
+                   alt.GradientStop(color='darkgreen', offset=1)],
+            x1=1, x2=1, y1=1, y2=0
+        )
+    ).encode(
+        x=alt.X('Date:T', title='날짜'),
+        y=alt.Y('Cum_Ret:Q', title='누적 수익률', axis=alt.Axis(format='%')),
+        tooltip=[alt.Tooltip('Date:T', format='%Y-%m-%d'), alt.Tooltip('Cum_Ret:Q', format='.2%')]
+    ).properties(height=300, title="누적 수익률 추이 (Cumulative Return)").interactive()
+
+    # (2) 수익률 분포 히스토그램
+    hist_chart = alt.Chart(df_reset).mark_bar().encode(
+        x=alt.X('Daily_Ret:Q', bin=alt.Bin(maxbins=50), title='일별 등락률'),
+        y=alt.Y('count()', title='빈도수'),
+        color=alt.value('purple')
+    ).properties(height=200, title="일별 등락률 분포 (Histogram)")
+
+    return alt.vconcat(cum_chart, hist_chart)
 # ----------------------------------------------------------------------
 # 4. 시각화 함수 (Cell 3 수정)
 # ----------------------------------------------------------------------
@@ -472,49 +558,93 @@ right_cell = cols[1].container(
 )
 
 
-with right_cell:  
+with right_cell:
     # --- 메인 패널: 결과 출력 ---
     if ticker:
         # 1. 데이터 로드
         df_raw = load_data(ticker, start_date, end_date)
         
         if df_raw is not None and not df_raw.empty:
-            # [NEW] 상단 주요 지표 대시보드 표시
+            # 상단 주요 지표
             display_metrics(df_raw)
             
-            # [NEW] 탭 구성 (기본 차트 vs 알고리즘 분석)
-            tab1, tab2 = st.tabs(["📈 기본 시세", "🧠 AI 추세 분석"])
+            # 탭 4개 구성
+            tab1, tab2, tab3, tab4 = st.tabs(["📈 기본 시세", "🧠 AI 추세 분석", "📐 기술적 지표", "📊 수익률 분석"])
             
-            # 탭 1: 캔들스틱 차트 (새로 추가된 기능)
+            # [Tab 1] 캔들스틱 (기존)
             with tab1:
                 candle_chart = visualize_candlestick(df_raw)
                 st.altair_chart(candle_chart, use_container_width=True)
                 st.subheader("일별 시세 데이터")
-                st.dataframe(df_raw.sort_index(ascending=False).head(5), use_container_width=True)
+                st.dataframe(df_raw.sort_index(ascending=False).head(10), use_container_width=True)
 
-            # 탭 2: 기존 알고리즘 분석 (기존 기능 이동)
+            # [Tab 2] 알고리즘 분석 (기존)
             with tab2:
                 if len(df_raw) < window_length:
                     st.warning(f"데이터 부족: 최소 {window_length}일 이상 필요합니다.")
                 else:
-                    with st.spinner("구간화 알고리즘을 실행 중입니다..."):
+                    with st.spinner("추세 패턴 분석 중..."):
                         df_processed = detect_market_phases(
                             df_raw, window_length, polyorder, min_days1, min_days2, adjust_window, min_hits, box_window
                         )
                     
-                    st.subheader("구간화 분석 결과")
                     fig = visualize_phases_altair_all_interactions(df_processed, pinpoints_df=pinpoints_df)
                     st.altair_chart(fig, use_container_width=True)
                     
-                    # 통계 요약 추가
                     if "Phase" in df_processed.columns:
                         counts = df_processed['Phase'].value_counts()
+                        st.markdown("#### 추세 분포 요약")
                         c1, c2, c3 = st.columns(3)
                         c1.metric("상승 구간", f"{counts.get('상승', 0)}일")
                         c2.metric("하락 구간", f"{counts.get('하락', 0)}일")
                         c3.metric("박스권", f"{counts.get('박스권', 0)}일")
                     
-                    st.subheader("관련 뉴스 이벤트")
+                    st.subheader("뉴스 이벤트 매칭")
                     st.dataframe(pinpoints_df, use_container_width=True, hide_index=True)
+
+            # [Tab 3] 기술적 지표 (복구됨 + 상세 설명 포함)
+            with tab3:
+                st.subheader("📐 기술적 지표 분석")
+                
+                # 1. 초보자용 요약
+                st.info("""
+                **💡 초보자를 위한 1분 요약**
+                * **볼린저 밴드:** 주가가 회색 띠를 벗어나면 다시 돌아오려는 성질이 있어요. (밴드 상단=비쌈, 하단=쌈)
+                * **MACD:** 빨간 막대가 커지면 '상승세', 파란 막대가 커지면 '하락세'입니다.
+                * **RSI:** 70을 넘으면 '과열(비쌈)', 30 밑이면 '침체(쌈)' 신호입니다.
+                """)
+
+                # 2. 차트
+                tech_chart = visualize_technical_indicators(df_raw)
+                st.altair_chart(tech_chart, use_container_width=True)
+                
+                # 3. 상세 설명 (Expander) - 여기 다시 추가했습니다!
+                with st.expander("📚 지표 상세 해석 가이드 (눌러서 보기)"):
+                    st.markdown("""
+                    ### 1. 볼린저 밴드 (Bollinger Bands)
+                    - **무엇인가요?** 주가가 다니는 '길'이라고 생각하세요. 
+                    - **해석법:** 주가는 보통 밴드 안에서 움직입니다. 
+                        - 캔들이 **위쪽 선**을 치면? 단기 고점일 수 있습니다. (매도 고려)
+                        - 캔들이 **아래쪽 선**을 치면? 단기 저점일 수 있습니다. (매수 고려)
+                    
+                    ### 2. MACD (추세)
+                    - **무엇인가요?** 주가의 '방향'과 '에너지'를 보여줍니다.
+                    - **해석법:** - **빨간 막대**가 점점 길어지면 상승 힘이 강해지는 것입니다.
+                        - **파란 막대**가 줄어들면서 빨간색으로 바뀌려는 순간이 '매수 타이밍'으로 불립니다.
+                    
+                    ### 3. RSI (상대강도지수)
+                    - **무엇인가요?** 시장의 '과열' 여부를 0~100 점수로 매긴 것입니다.
+                    - **해석법:**
+                        - **70 이상 (점선 위):** "너무 뜨겁다!" 사람들이 너무 많이 사서 비싼 상태일 수 있습니다. (조심!)
+                        - **30 이하 (점선 아래):** "너무 차갑다!" 사람들이 너무 많이 팔아서 싼 상태일 수 있습니다. (기회?)
+                    """)
+
+            # [Tab 4] 수익률 분석 (복구됨)
+            with tab4:
+                st.subheader("📊 수익률 퍼포먼스")
+                st.caption("이 기간 동안 보유했을 때의 누적 수익률과 변동성입니다.")
+                return_chart = visualize_return_analysis(df_raw)
+                st.altair_chart(return_chart, use_container_width=True)
+
     else:
-        st.info("좌측 사이드바에서 종목 코드를 입력하고 기간을 설정해주세요.")
+        st.info("좌측 사이드바에서 분석할 종목을 선택해주세요.")

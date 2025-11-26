@@ -735,29 +735,31 @@ if not st.session_state.focus_mode:
             st.info("왼쪽에서 뉴스를 클릭하면 여기 내용이 표시됩니다. (추후 실제 뉴스 데이터로 교체)")
 
 # ----------------------------------------------------------------------
-# [NEW] 12. AI 주식 상담 챗봇 (Google Gemini - 무료 버전)
+# [NEW] 12. AI 주식 상담 챗봇 (Google Gemini - 자동 키 감지)
 # ----------------------------------------------------------------------
 with st.sidebar:
     st.markdown("---")
     st.header("🤖 Gemini 주식 비서 (Free)")
+
+    # [수정됨] Secrets에서 키를 먼저 찾고, 없으면 입력창 띄우기
+    if "GOOGLE_API_KEY" in st.secrets:
+        api_key = st.secrets["GOOGLE_API_KEY"]
+        st.success("API 키가 연동되었습니다! ✅")
+    else:
+        api_key = st.text_input("Google API Key를 입력하세요", type="password")
+        if not api_key:
+            st.info("API 키를 입력하거나, Secrets에 설정하면 자동으로 연동됩니다.")
+            st.markdown("[👉 키 발급받으러 가기](https://aistudio.google.com/app/apikey)")
     
-    # 1. API 키 입력 받기
-    # (키 발급 주소: https://aistudio.google.com/app/apikey)
-    api_key = st.text_input("Google API Key를 입력하세요", type="password", help="https://aistudio.google.com/app/apikey 에서 무료로 발급받으세요.")
-    
-    if not api_key:
-        st.info("API 키를 입력하면 무료로 대화할 수 있어요!")
-        st.markdown("[👉 키 발급받으러 가기](https://aistudio.google.com/app/apikey)")
-    
-    # 2. 채팅 기록 초기화
+    # 채팅 기록 초기화
     if "messages" not in st.session_state:
         st.session_state.messages = [
             {"role": "assistant", "content": "안녕하세요! 저는 구글 Gemini입니다. 주식에 대해 물어보세요! 🌕"}
         ]
 
-    # 3. 채팅 메시지 출력
+    # 채팅 메시지 출력
+    # (키가 있을 때만 채팅창 활성화)
     if api_key:
-        # 채팅창 컨테이너
         chat_container = st.container()
         with chat_container:
             for msg in st.session_state.messages:
@@ -766,22 +768,21 @@ with st.sidebar:
                 else:
                     st.chat_message("assistant", avatar="🤖").write(msg["content"])
 
-        # 4. 사용자 입력 처리
+        # 사용자 입력 처리
         if prompt := st.chat_input("질문을 입력하세요... (예: RSI가 뭐야?)"):
-            # 설정
+            # 1. 설정 (매번 호출 시 설정)
             genai.configure(api_key=api_key)
             
-            # 사용자 메시지 저장
+            # 2. 사용자 메시지 저장
             st.session_state.messages.append({"role": "user", "content": prompt})
             st.chat_message("user").write(prompt)
             
             try:
                 with st.spinner("Gemini가 분석 중입니다..."):
-                    # 모델 설정 (gemini-1.5-flash 가 빠르고 무료 티어에 적합)
+                    # 모델 설정 (에러 방지를 위해 안전한 모델명 사용 권장)
+                    # 만약 1.5-flash가 계속 안 되면 'gemini-pro'로 바꿔보세요.
                     model = genai.GenerativeModel('gemini-1.5-flash')
                     
-                    # 간단한 대화 생성 (이전 문맥은 생략하고 현재 질문만 보냄 - 토큰 절약 및 단순화)
-                    # (필요하면 chat history를 구성해서 보낼 수도 있음)
                     response = model.generate_content(prompt)
                     ai_msg = response.text
                     

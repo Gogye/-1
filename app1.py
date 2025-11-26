@@ -947,20 +947,18 @@ with st.sidebar:
                     # 모델 설정
                     model = genai.GenerativeModel('gemini-2.5-flash')
                     
-                    # 대화 기록을 모델에 전달
-                    history = [
-                        genai.types.Content(
-                            role=m['role'], 
-                            parts=[genai.types.Part.from_text(m['content'])]
-                        ) 
+                    # --- [수정된 부분]: history 구성을 더 간단하고 표준적인 방식으로 변경 ---
+                    # 대화 기록을 모델에 전달할 형식으로 변환 (messages는 [{'role': str, 'content': str}] 형태)
+                    history_for_api = [
+                        {
+                            "role": m['role'].replace('assistant', 'model'), # Gemini API는 'model' role을 사용합니다.
+                            "parts": [{"text": m['content']}]
+                        }
                         for m in st.session_state.chat_sessions[current_session_id]['messages']
                     ]
                     
-                    # 새로운 메시지 추가
-                    history.append(genai.types.Content(
-                        role="user",
-                        parts=[genai.types.Part.from_text(prompt)]
-                    ))
+                    # 마지막 사용자 메시지를 포함하여 전체 대화 기록을 contents로 전달
+                    # (위에서 이미 st.session_state에 마지막 메시지를 추가했으므로, 그대로 사용)
 
                     # 시스템 인스트럭션 추가 (optional, but good for financial persona)
                     system_instruction_text = (
@@ -970,11 +968,13 @@ with st.sidebar:
                     )
                     
                     response = model.generate_content(
-                        history,
+                        contents=history_for_api, # 수정된 history_for_api 리스트를 전달
                         config=genai.types.GenerateContentConfig(
                             system_instruction=system_instruction_text
                         )
                     )
+                    # -----------------------------------------------------------------
+
                     ai_msg = response.text
                     
                     # AI 응답 저장 (현재 세션에 추가)
@@ -984,9 +984,10 @@ with st.sidebar:
                     st.chat_message("assistant", avatar="🤖").write(ai_msg)
                     
             except Exception as e:
+                # 에러 메시지 출력 시, 오류 원인을 더 명확히 알 수 있도록 예외 처리를 유지합니다.
                 st.error(f"오류가 발생했습니다: {e}")
                 # 에러 발생 시 사용자 메시지만 남기고 AI 메시지는 추가하지 않음
-                # st.session_state.chat_sessions[current_session_id]['messages'].pop() 
+                st.session_state.chat_sessions[current_session_id]['messages'].pop() 
                 
 # ----------------------------------------------------------------------
 # 11. 푸터 (기존 코드 유지)

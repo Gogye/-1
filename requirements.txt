@@ -9,3 +9,4 @@ koreanize-matplotlib
 scipy
 ta
 seaborn
+openai

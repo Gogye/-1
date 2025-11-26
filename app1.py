@@ -973,6 +973,8 @@ with st.sidebar:
                         for m in st.session_state.chat_sessions[current_session_id]['messages']
                     ]
                     
+                    # system_instruction은 config 딕셔너리가 아닌, generate_content의 키워드 인수로 직접 전달하는 방식이
+                    # 가장 최신 및 표준 SDK에서 안정적입니다.
                     system_instruction_text = (
                         "당신은 금융 및 주식 시장 분석에 특화된 유능한 Gemini AI 어시스턴트입니다. "
                         "친절하고 정확하게 답변하며, 질문에 대한 구체적인 근거와 설명을 제공합니다. "
@@ -981,9 +983,7 @@ with st.sidebar:
                     
                     response = model.generate_content(
                         contents=history_for_api, # 전체 대화 기록을 전달하여 맥락 유지
-                        config={ 
-                            "system_instruction": system_instruction_text
-                        }
+                        system_instruction=system_instruction_text # config 대신 직접 인수로 전달
                     )
                     # -----------------------------------------------------------------------
 

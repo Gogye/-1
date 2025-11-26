@@ -10,8 +10,6 @@ import ta
 import random
 from datetime import datetime
 import google.generativeai as genai
-# 수정: types 모듈 임포트 방식을 제거하고 config를 딕셔너리로 직접 전달하여 호환성 문제를 해결합니다.
-# from google.generativeai.types import GenerateContentConfig 
 import uuid # For generating unique chat IDs
 
 # ----------------------------------------------------------------------
@@ -149,7 +147,7 @@ POPULAR_STOCKS_ALL = [
 CHAT_CATEGORIES = ["기술적 분석", "기본적 분석", "시장 뉴스", "투자 심리", "기타"]
 
 # ----------------------------------------------------------------------
-# 3. 세션 상태 초기화
+# 3. 세션 상태 초기화 (CHAT HISTORY 추가)
 # ----------------------------------------------------------------------
 if "page_mode" not in st.session_state:
     st.session_state.page_mode = "HOME"  # HOME 또는 DETAIL
@@ -170,6 +168,10 @@ if "chat_sessions" not in st.session_state:
     st.session_state.chat_sessions = {}
 if "current_session_id" not in st.session_state:
     st.session_state.current_session_id = None
+# [기존 메시지 대신 세션 사용]
+if "messages" in st.session_state:
+    del st.session_state.messages 
+
 
 # ----------------------------------------------------------------------
 # 4. 데이터 로딩 함수 (캐싱 적용)
@@ -815,6 +817,7 @@ def _create_new_chat(title, category):
     st.session_state.chat_sessions[new_id] = {
         'title': title,
         'category': category,
+        # 초기 메시지는 환영 메시지로 설정
         'messages': [{"role": "assistant", "content": "안녕하세요! 저는 구글 Gemini입니다. 주식에 대해 물어보세요! 🌕"}],
         'created_at': datetime.now()
     }
@@ -849,13 +852,13 @@ with st.sidebar:
 
     if not api_key:
         st.warning("API 키가 설정되지 않아 챗봇 기능을 사용할 수 없습니다.")
-        # 키가 없을 경우, 히스토리 관리 UI도 숨김.
     else:
         # --- 챗봇 히스토리 관리 UI ---
         st.markdown("#### 📁 대화 기록 관리")
         
         # 1. 새 대화 만들기 폼
         with st.expander("➕ 새 대화 시작"):
+            # 새 대화 제목과 카테고리 입력
             new_title = st.text_input(
                 "대화 제목", 
                 value=st.session_state.get('new_chat_title', ''),
@@ -891,50 +894,61 @@ with st.sidebar:
                 btn_class = "chat-btn chat-btn-active" if is_active else "chat-btn"
                 btn_style = "background-color: #e6f7ff;" if is_active else ""
                 
-                st.markdown(
-                    f"""
-                    <div 
-                        class="{btn_class}" 
-                        style="{btn_style}"
-                        onclick="window.parent.postMessage({{ 'type': 'streamlit:setComponentValue', 'value': '{session_id}', 'key': 'chat_load_{session_id}' }}, '*')"
-                        title="{session_data['title']}"
-                    >
-                        <div class="chat-btn-title">🏷️ {session_data['title']}</div>
-                        <div class="chat-btn-category">{session_data['category']} | {session_data['created_at'].strftime('%m-%d %H:%M')}</div>
-                    </div>
-                    """,
-                    unsafe_allow_html=True
-                )
-                # Streamlit Button for Python logic (hidden but needed for proper callback)
-                if st.button("", key=f"chat_load_{session_id}", on_click=_load_chat, args=(session_id,), help=f"대화 불러오기: {session_data['title']}", use_container_width=True):
-                    pass # Handled by on_click
+                # Streamlit 버튼을 사용하여 세션 로드 (HTML 버튼은 시각적인 역할)
+                if st.button(
+                    f"🏷️ {session_data['title']} \n\n <span style='font-size: 0.7rem; color: #666;'>{session_data['category']} | {session_data['created_at'].strftime('%m-%d %H:%M')}</span>",
+                    key=f"chat_load_{session_id}", 
+                    on_click=_load_chat, 
+                    args=(session_id,), 
+                    help=f"대화 불러오기: {session_data['title']}", 
+                    use_container_width=True
+                ):
+                    pass # on_click 핸들러가 rerunning을 유발하여 세션을 로드
+
         else:
             st.info("아직 저장된 대화가 없습니다. 새 대화를 시작해 보세요!")
 
 
         # --- 현재 채팅창 및 입력 ---
         st.markdown("---")
-        if st.session_state.current_session_id:
+        
+        # 현재 세션 메시지 로드
+        if st.session_state.current_session_id and st.session_state.current_session_id in st.session_state.chat_sessions:
             current_session = st.session_state.chat_sessions[st.session_state.current_session_id]
             st.subheader(f"대화: {current_session['title']}")
             current_messages = current_session['messages']
         else:
-            # 현재 세션이 없으면 임시 메시지 리스트를 사용
+            # 현재 세션이 없거나 초기 상태인 경우, 새 임시 세션을 보여줍니다.
+            st.subheader("대화: 새 대화")
             current_messages = [{"role": "assistant", "content": "새 대화를 시작하거나 기존 대화를 불러오세요. 👆"}]
 
 
         # 채팅 메시지 출력
         chat_container = st.container()
         with chat_container:
-            # st.session_state.messages 대신 current_messages 사용
             for msg in current_messages:
                 if msg["role"] == "user":
                     st.chat_message("user").write(msg["content"])
                 else:
                     st.chat_message("assistant", avatar="🤖").write(msg["content"])
+        
+        # 새 대화에서 질문이 들어오면 세션 시작
+        if not st.session_state.current_session_id:
+            # 현재 선택된 세션이 없을 경우, 질문을 입력하면 새 세션으로 자동 시작
+            if prompt := st.chat_input("질문을 입력하세요... (자동으로 새 대화 시작)"):
+                _create_new_chat("무제 대화", "기타")
+                # 새 세션이 생성되었으니 prompt 처리를 위해 rerun
+                st.session_state.initial_prompt = prompt
+                st.rerun()
+        
+        # 사용자 입력 처리 (세션이 활성화된 경우)
+        if st.session_state.current_session_id and (prompt := st.chat_input("질문을 입력하세요... (예: RSI가 뭐야?)", key="chat_input_active")):
+            
+            # 초기 프롬프트 처리 (이전 단계에서 자동 생성된 경우)
+            if 'initial_prompt' in st.session_state:
+                 prompt = st.session_state.initial_prompt
+                 del st.session_state.initial_prompt
 
-        # 사용자 입력 처리
-        if st.session_state.current_session_id and (prompt := st.chat_input("질문을 입력하세요... (예: RSI가 뭐야?)")):
             current_session_id = st.session_state.current_session_id
             
             # 1. 설정
@@ -946,10 +960,10 @@ with st.sidebar:
             
             try:
                 with st.spinner("Gemini가 분석 중입니다..."):
-                    # 모델 설정
                     model = genai.GenerativeModel('gemini-2.5-flash')
                     
-                    # --- history 구성을 위한 데이터 변환 ---
+                    # --- [수정된 핵심 부분]: 대화 맥락을 포함하도록 generate_content 호출 변경 ---
+                    # 대화 기록을 모델에 전달할 형식으로 변환
                     history_for_api = [
                         {
                             # Gemini API는 'model' role을 사용합니다.
@@ -959,21 +973,19 @@ with st.sidebar:
                         for m in st.session_state.chat_sessions[current_session_id]['messages']
                     ]
                     
-                    # 시스템 인스트럭션 추가
                     system_instruction_text = (
                         "당신은 금융 및 주식 시장 분석에 특화된 유능한 Gemini AI 어시스턴트입니다. "
                         "친절하고 정확하게 답변하며, 질문에 대한 구체적인 근거와 설명을 제공합니다. "
                         "한국어로 대화하며, 전문 용어는 쉽게 풀어서 설명해주고, 투자 권유가 아닌 정보 제공임을 명시합니다."
                     )
                     
-                    # --- API 호출 (딕셔너리 config로 전달) ---
                     response = model.generate_content(
-                        contents=history_for_api, 
+                        contents=history_for_api, # 전체 대화 기록을 전달하여 맥락 유지
                         config={ 
                             "system_instruction": system_instruction_text
                         }
                     )
-                    # ---------------------------------------
+                    # -----------------------------------------------------------------------
 
                     ai_msg = response.text
                     

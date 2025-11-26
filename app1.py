@@ -781,7 +781,7 @@ with st.sidebar:
                 with st.spinner("Gemini가 분석 중입니다..."):
                     # 모델 설정 (에러 방지를 위해 안전한 모델명 사용 권장)
                     # 만약 1.5-flash가 계속 안 되면 'gemini-pro'로 바꿔보세요.
-                    model = genai.GenerativeModel('gemini-pro')
+                    model = genai.GenerativeModel('gemini-2.5-flash')
                     
                     response = model.generate_content(prompt)
                     ai_msg = response.text

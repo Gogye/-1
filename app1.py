@@ -10,6 +10,8 @@ import ta
 import random
 from datetime import datetime
 import google.generativeai as genai
+# 수정: types 모듈 임포트 방식을 변경하여 안정성을 높입니다.
+from google.generativeai.types import GenerateContentConfig 
 import uuid # For generating unique chat IDs
 
 # ----------------------------------------------------------------------
@@ -967,9 +969,11 @@ with st.sidebar:
                         "한국어로 대화하며, 전문 용어는 쉽게 풀어서 설명해주고, 투자 권유가 아닌 정보 제공임을 명시합니다."
                     )
                     
+                    # GenerateContentConfig를 안정적으로 호출하도록 수정 (클래스 이름 앞에 types 모듈 경로 제거)
+                    # types 모듈에서 직접 임포트했기 때문에 클래스 이름만 사용합니다.
                     response = model.generate_content(
                         contents=history_for_api, # 수정된 history_for_api 리스트를 전달
-                        config=genai.types.GenerateContentConfig(
+                        config=GenerateContentConfig( # genai.types.GenerateContentConfig 대신 GenerateContentConfig 사용
                             system_instruction=system_instruction_text
                         )
                     )

@@ -10,6 +10,7 @@ import ta
 import random
 from datetime import datetime
 import google.generativeai as genai
+import uuid # For generating unique chat IDs
 
 # ----------------------------------------------------------------------
 # 0. 페이지 설정 & 전역 스타일
@@ -65,6 +66,37 @@ st.markdown(
         color: #999;
         text-align: center;
     }
+    .stChatInputContainer {
+        border-top: 1px solid #ccc;
+    }
+    /* Chat history button style */
+    .chat-btn {
+        width: 100%;
+        text-align: left;
+        padding: 0.5rem 0.75rem;
+        margin-bottom: 0.25rem;
+        border-radius: 0.5rem;
+        cursor: pointer;
+        transition: background-color 0.2s;
+    }
+    .chat-btn:hover {
+        background-color: #f0f0f0;
+    }
+    .chat-btn-active {
+        background-color: #e6f7ff; /* light blue */
+        border: 1px solid #91d5ff;
+        font-weight: 600;
+    }
+    .chat-btn-title {
+        font-size: 0.85rem;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+    .chat-btn-category {
+        font-size: 0.7rem;
+        color: #666;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -112,6 +144,8 @@ POPULAR_STOCKS_ALL = [
     {"code": "012450", "name": "한화에어로스페이스"},
 ]
 
+CHAT_CATEGORIES = ["기술적 분석", "기본적 분석", "시장 뉴스", "투자 심리", "기타"]
+
 # ----------------------------------------------------------------------
 # 3. 세션 상태 초기화
 # ----------------------------------------------------------------------
@@ -126,6 +160,14 @@ if "popular_sample" not in st.session_state:
 
 if "popular_refresh_time" not in st.session_state:
     st.session_state.popular_refresh_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+# [추가] 챗봇 세션 관리 상태 초기화
+if "chat_sessions" not in st.session_state:
+    # Key: UUID (Session ID)
+    # Value: {'title': str, 'category': str, 'messages': list, 'created_at': datetime}
+    st.session_state.chat_sessions = {}
+if "current_session_id" not in st.session_state:
+    st.session_state.current_session_id = None
 
 # ----------------------------------------------------------------------
 # 4. 데이터 로딩 함수 (캐싱 적용)
@@ -144,7 +186,7 @@ def load_data(ticker, start_date, end_date):
         return None
 
 # ----------------------------------------------------------------------
-# 5. 알고리즘 함수들
+# 5. 알고리즘 함수들 (기존 코드 유지)
 # ----------------------------------------------------------------------
 def apply_smoothing_and_phase(df, window_length, polyorder):
     df = df.copy()
@@ -231,12 +273,21 @@ def merge_short_phases(df, min_days):
             if g_max - g_min >= (df['Close'].max() - df['Close'].min()) / 5:
                 continue
 
-            prev_phase = df.loc[df["group_id"] == group_id - 1, "Phase"].iloc[0]
-            next_phase = df.loc[df["group_id"] == group_id + 1, "Phase"].iloc[0]
+            prev_group_mask = df["group_id"] == group_id - 1
+            if not prev_group_mask.empty:
+                prev_phase = df.loc[prev_group_mask, "Phase"].iloc[0]
+            else:
+                prev_phase = None
+            
+            next_group_mask = df["group_id"] == group_id + 1
+            if not next_group_mask.empty:
+                next_phase = df.loc[next_group_mask, "Phase"].iloc[0]
+            else:
+                next_phase = None
 
-            if prev_phase != '박스권':
+            if prev_phase and prev_phase != '박스권':
                 df.loc[mask, "Phase"] = prev_phase
-            elif next_phase != '박스권':
+            elif next_phase and next_phase != '박스권':
                 df.loc[mask, "Phase"] = next_phase
     return df
 
@@ -295,7 +346,7 @@ def detect_market_phases(df, window_length, polyorder, min_days1, min_days2, adj
     return df_result
 
 # ----------------------------------------------------------------------
-# 6. 시각화 / 지표 함수들
+# 6. 시각화 / 지표 함수들 (기존 코드 유지)
 # ----------------------------------------------------------------------
 def display_metrics(df):
     if len(df) < 2:
@@ -546,7 +597,7 @@ st.markdown(
 )
 
 # ----------------------------------------------------------------------
-# 8. 홈 화면 렌더 함수
+# 8. 홈 화면 렌더 함수 (기존 코드 유지)
 # ----------------------------------------------------------------------
 def render_home():
     # 왼쪽: 찾는 종목 / 가운데 여백 / 오른쪽: 인기종목
@@ -624,7 +675,7 @@ def render_home():
             st.info("👉 이 영역에 실제 뉴스 본문 또는 링크를 나중에 넣으면 됩니다.")
 
 # ----------------------------------------------------------------------
-# 9. 상세 분석 화면 렌더 함수
+# 9. 상세 분석 화면 렌더 함수 (기존 코드 유지)
 # ----------------------------------------------------------------------
 def render_detail():
     ticker = st.session_state.selected_ticker
@@ -633,6 +684,7 @@ def render_detail():
     with top_cols[0]:
         if st.button("← 홈으로 돌아가기"):
             st.session_state.page_mode = "HOME"
+            st.rerun() # Ensure navigation works instantly
     with top_cols[1]:
         st.markdown(f"### 📊 {ticker} 상세 분석")
 
@@ -686,10 +738,10 @@ def render_detail():
                         min_days1, min_days2,
                         adjust_window, min_hits, box_window
                     )
-                fig = visualize_phases_altair_all_interactions(
-                    df_processed, pinpoints_df=pinpoints_df
-                )
-                st.altair_chart(fig, use_container_width=True)
+                    fig = visualize_phases_altair_all_interactions(
+                        df_processed, pinpoints_df=pinpoints_df
+                    )
+                    st.altair_chart(fig, use_container_width=True)
 
                 if "Phase" in df_processed.columns:
                     counts = df_processed['Phase'].value_counts()
@@ -720,13 +772,13 @@ def render_detail():
                 - **해석법:** 주가는 보통 밴드 안에서 움직입니다. 
                     - 캔들이 **위쪽 선**을 치면? 단기 고점일 수 있습니다. (매도 고려)
                     - 캔들이 **아래쪽 선**을 치면? 단기 저점일 수 있습니다. (매수 고려)
-                
+                    
                 ### 2. MACD (추세)
                 - **무엇인가요?** 주가의 '방향'과 '에너지'를 보여줍니다.
                 - **해석법:**
                     - **빨간 막대**가 점점 길어지면 상승 힘이 강해지는 것입니다.
                     - **파란 막대**가 줄어들면서 빨간색으로 바뀌려는 순간이 '매수 타이밍'으로 불립니다.
-                
+                    
                 ### 3. RSI (상대강도지수)
                 - **무엇인가요?** 시장의 '과열' 여부를 0~100 점수로 매긴 것입니다.
                 - **해석법:**
@@ -749,67 +801,195 @@ else:
     st.session_state.page_mode = "HOME"
     render_home()
 
+
 # ----------------------------------------------------------------------
-# [NEW] 12. AI 주식 상담 챗봇 (Google Gemini - 자동 키 감지)
+# 12. AI 주식 상담 챗봇 (Google Gemini - History/Category Logic Added)
 # ----------------------------------------------------------------------
+
+# 헬퍼 함수
+def _create_new_chat(title, category):
+    """새로운 채팅 세션을 생성하고 현재 세션으로 설정합니다."""
+    new_id = str(uuid.uuid4())
+    st.session_state.chat_sessions[new_id] = {
+        'title': title,
+        'category': category,
+        'messages': [{"role": "assistant", "content": "안녕하세요! 저는 구글 Gemini입니다. 주식에 대해 물어보세요! 🌕"}],
+        'created_at': datetime.now()
+    }
+    st.session_state.current_session_id = new_id
+    st.session_state.new_chat_title = "" # clear input
+    st.rerun()
+
+def _load_chat(session_id):
+    """선택된 채팅 세션을 현재 세션으로 로드합니다."""
+    st.session_state.current_session_id = session_id
+    st.rerun()
+
+# --- 사이드바 시작 ---
 with st.sidebar:
     st.markdown("---")
     st.header("🤖 Gemini 주식 비서")
 
-    # [수정됨] Secrets에서 키를 먼저 찾고, 없으면 입력창 띄우기
+    # [수정됨] API 키 연동
+    api_key = ""
     if "GOOGLE_API_KEY" in st.secrets:
         api_key = st.secrets["GOOGLE_API_KEY"]
         st.success("API 키가 연동되었습니다! ✅")
     else:
-        api_key = st.text_input("Google API Key를 입력하세요", type="password")
+        # Canvas 환경에서 st.text_input을 사용해 키를 받도록 처리
+        key_input = st.text_input("Google API Key를 입력하세요", type="password", key="sidebar_api_key_input")
+        if key_input:
+            api_key = key_input
+            st.session_state['api_key_set'] = True # For rerunning only when key is set
         if not api_key:
             st.info("API 키를 입력하거나, Secrets에 설정하면 자동으로 연동됩니다.")
             st.markdown("[👉 키 발급받으러 가기](https://aistudio.google.com/app/apikey)")
-    
-    # 채팅 기록 초기화
-    if "messages" not in st.session_state:
-        st.session_state.messages = [
-            {"role": "assistant", "content": "안녕하세요! 저는 구글 Gemini입니다. 주식에 대해 물어보세요! 🌕"}
-        ]
 
-    # 채팅 메시지 출력
-    # (키가 있을 때만 채팅창 활성화)
-    if api_key:
+    if not api_key:
+        st.warning("API 키가 설정되지 않아 챗봇 기능을 사용할 수 없습니다.")
+        # 키가 없을 경우, 히스토리 관리 UI도 숨김.
+    else:
+        # --- 챗봇 히스토리 관리 UI ---
+        st.markdown("#### 📁 대화 기록 관리")
+        
+        # 1. 새 대화 만들기 폼
+        with st.expander("➕ 새 대화 시작"):
+            new_title = st.text_input(
+                "대화 제목", 
+                value=st.session_state.get('new_chat_title', ''),
+                key="new_chat_title_input", 
+                placeholder="예: 삼성전자 기술적 분석"
+            )
+            new_category = st.selectbox(
+                "카테고리", 
+                options=CHAT_CATEGORIES, 
+                key="new_chat_category_select"
+            )
+            if st.button("새 대화 시작하기", use_container_width=True, type="primary"):
+                if new_title.strip():
+                    _create_new_chat(new_title.strip(), new_category)
+                else:
+                    st.error("제목을 입력해 주세요.")
+        
+        st.markdown("##### 저장된 대화")
+        
+        # 2. 대화 목록 표시
+        if st.session_state.chat_sessions:
+            # 최신순으로 정렬
+            sorted_sessions = sorted(
+                st.session_state.chat_sessions.items(), 
+                key=lambda item: item[1]['created_at'], 
+                reverse=True
+            )
+            
+            for session_id, session_data in sorted_sessions:
+                is_active = session_id == st.session_state.current_session_id
+                
+                # HTML을 사용하여 클릭 가능한 버튼처럼 만듦
+                btn_class = "chat-btn chat-btn-active" if is_active else "chat-btn"
+                btn_style = "background-color: #e6f7ff;" if is_active else ""
+                
+                st.markdown(
+                    f"""
+                    <div 
+                        class="{btn_class}" 
+                        style="{btn_style}"
+                        onclick="window.parent.postMessage({{ 'type': 'streamlit:setComponentValue', 'value': '{session_id}', 'key': 'chat_load_{session_id}' }}, '*')"
+                        title="{session_data['title']}"
+                    >
+                        <div class="chat-btn-title">🏷️ {session_data['title']}</div>
+                        <div class="chat-btn-category">{session_data['category']} | {session_data['created_at'].strftime('%m-%d %H:%M')}</div>
+                    </div>
+                    """,
+                    unsafe_allow_html=True
+                )
+                # Streamlit Button for Python logic (hidden but needed for proper callback)
+                if st.button("", key=f"chat_load_{session_id}", on_click=_load_chat, args=(session_id,), help=f"대화 불러오기: {session_data['title']}", use_container_width=True):
+                    pass # Handled by on_click
+        else:
+            st.info("아직 저장된 대화가 없습니다. 새 대화를 시작해 보세요!")
+
+
+        # --- 현재 채팅창 및 입력 ---
+        st.markdown("---")
+        if st.session_state.current_session_id:
+            current_session = st.session_state.chat_sessions[st.session_state.current_session_id]
+            st.subheader(f"대화: {current_session['title']}")
+            current_messages = current_session['messages']
+        else:
+            # 현재 세션이 없으면 임시 메시지 리스트를 사용
+            current_messages = [{"role": "assistant", "content": "새 대화를 시작하거나 기존 대화를 불러오세요. 👆"}]
+
+
+        # 채팅 메시지 출력
         chat_container = st.container()
         with chat_container:
-            for msg in st.session_state.messages:
+            # st.session_state.messages 대신 current_messages 사용
+            for msg in current_messages:
                 if msg["role"] == "user":
                     st.chat_message("user").write(msg["content"])
                 else:
                     st.chat_message("assistant", avatar="🤖").write(msg["content"])
 
         # 사용자 입력 처리
-        if prompt := st.chat_input("질문을 입력하세요... (예: RSI가 뭐야?)"):
-            # 1. 설정 (매번 호출 시 설정)
+        if st.session_state.current_session_id and (prompt := st.chat_input("질문을 입력하세요... (예: RSI가 뭐야?)")):
+            current_session_id = st.session_state.current_session_id
+            
+            # 1. 설정
             genai.configure(api_key=api_key)
             
-            # 2. 사용자 메시지 저장
-            st.session_state.messages.append({"role": "user", "content": prompt})
+            # 2. 사용자 메시지 저장 (현재 세션에 추가)
+            st.session_state.chat_sessions[current_session_id]['messages'].append({"role": "user", "content": prompt})
             st.chat_message("user").write(prompt)
             
             try:
                 with st.spinner("Gemini가 분석 중입니다..."):
-                    # 모델 설정 (에러 방지를 위해 안전한 모델명 사용 권장)
-                    # 만약 1.5-flash가 계속 안 되면 'gemini-pro'로 바꿔보세요.
+                    # 모델 설정
                     model = genai.GenerativeModel('gemini-2.5-flash')
                     
-                    response = model.generate_content(prompt)
+                    # 대화 기록을 모델에 전달
+                    history = [
+                        genai.types.Content(
+                            role=m['role'], 
+                            parts=[genai.types.Part.from_text(m['content'])]
+                        ) 
+                        for m in st.session_state.chat_sessions[current_session_id]['messages']
+                    ]
+                    
+                    # 새로운 메시지 추가
+                    history.append(genai.types.Content(
+                        role="user",
+                        parts=[genai.types.Part.from_text(prompt)]
+                    ))
+
+                    # 시스템 인스트럭션 추가 (optional, but good for financial persona)
+                    system_instruction_text = (
+                        "당신은 금융 및 주식 시장 분석에 특화된 유능한 Gemini AI 어시스턴트입니다. "
+                        "친절하고 정확하게 답변하며, 질문에 대한 구체적인 근거와 설명을 제공합니다. "
+                        "한국어로 대화하며, 전문 용어는 쉽게 풀어서 설명해주고, 투자 권유가 아닌 정보 제공임을 명시합니다."
+                    )
+                    
+                    response = model.generate_content(
+                        history,
+                        config=genai.types.GenerateContentConfig(
+                            system_instruction=system_instruction_text
+                        )
+                    )
                     ai_msg = response.text
                     
-                    # AI 응답 저장
-                    st.session_state.messages.append({"role": "assistant", "content": ai_msg})
+                    # AI 응답 저장 (현재 세션에 추가)
+                    st.session_state.chat_sessions[current_session_id]['messages'].append({"role": "assistant", "content": ai_msg})
+                    st.session_state.chat_sessions[current_session_id]['created_at'] = datetime.now() # Update timestamp
+                    
                     st.chat_message("assistant", avatar="🤖").write(ai_msg)
                     
             except Exception as e:
                 st.error(f"오류가 발생했습니다: {e}")
-
+                # 에러 발생 시 사용자 메시지만 남기고 AI 메시지는 추가하지 않음
+                # st.session_state.chat_sessions[current_session_id]['messages'].pop() 
+                
 # ----------------------------------------------------------------------
-# 11. 푸터
+# 11. 푸터 (기존 코드 유지)
 # ----------------------------------------------------------------------
 st.markdown(
     """

@@ -8,6 +8,79 @@ import math
 import altair as alt
 import ta
 
+# ----------------------------------------------------------------------
+# 0. 디자인 설정 및 CSS 커스터마이징 (추가/수정된 핵심 부분)
+# ----------------------------------------------------------------------
+st.set_page_config(
+    layout="wide",
+    page_title="주가 추세 분석기 (Final)",
+    # icon="📈"
+)
+
+# 깔끔한 디자인을 위한 CSS 적용
+st.markdown("""
+<style>
+/* 폰트 및 기본 설정: 깔끔한 sans-serif 폰트 */
+@import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;600;700&display=swap');
+html, body, [class*="st-emotion-cache"] {
+    font-family: 'Pretendard', sans-serif;
+}
+
+/* 주요 제목 (H1) 디자인: 굵게, 넓은 공간 */
+h1 {
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: #1a1a1a;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+/* 모든 컨테이너 (st.container) 및 위젯에 부드러운 모서리, 은은한 그림자 적용 */
+.st-emotion-cache-1kyxreq { /* Container/Block selector for main content */
+    border-radius: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05); /* 은은한 그림자 */
+    transition: all 0.3s ease;
+}
+
+/* st.metric 배경과 폰트 */
+[data-testid="stMetric"] > div {
+    background-color: #f7f9fc; /* 연한 배경색 */
+    padding: 15px;
+    border-radius: 10px;
+    border-left: 5px solid #4a90e2; /* 포인트 색상 */
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.03);
+}
+[data-testid="stMetricLabel"] {
+    font-weight: 600 !important;
+    color: #555555 !important;
+}
+
+/* Expander (접기) 디자인 */
+[data-testid="stExpander"] > div > div:first-child {
+    background-color: #f0f4f8;
+    border-radius: 8px;
+    padding: 10px 15px;
+    margin-bottom: 5px;
+    font-weight: 600;
+}
+
+/* Info 메시지 (st.info) */
+.st-emotion-cache-12fmwpl {
+    border-radius: 8px;
+    background-color: #e6f7ff; /* 라이트 블루 */
+    border-left: 5px solid #1890ff; /* 진한 파랑 */
+}
+
+/* 탭 디자인 개선 */
+[data-testid="stTab"] {
+    border-radius: 8px 8px 0 0 !important;
+    margin-right: 5px;
+    font-weight: 600;
+}
+</style>
+""", unsafe_allow_html=True)
+
+
 pinpoints_df = pd.DataFrame({
     'Date': ['2024-06-05', '2024-10-10'],
     'Event': ['Vision Pro 발표', '신제품 출시'],
@@ -192,7 +265,6 @@ def adjust_change_points(df, adjust_window):
 def detect_market_phases(df, window_length, polyorder, min_days1, min_days2, adjust_window, min_hits, box_window):
     """
     노트북의 알고리즘을 순서대로 실행합니다.
-    (Cell 10의 실행 순서와 Cell 6의 함수 정의를 참고하여 재구성)
     """
     df_result = df.copy()
     
@@ -223,13 +295,13 @@ def display_metrics(df):
     price_diff = close_price - prev['Close']
     pct_change = (price_diff / prev['Close']) * 100
     volume = latest['Volume']
-    rsi = ta.momentum.RSIIndicator(df['Close'], window=14).rsi().iloc[-1]
+    rsi = ta.momentum.RSIIndicator(df['Close'], window=14).rsi().iloc[-1] if len(df) >= 14 else np.nan
     high_52w = df['Close'][-250:].max() if len(df) > 250 else df['Close'].max()
     
     m1, m2, m3, m4 = st.columns(4)
     with m1: st.metric(label="현재 주가", value=f"{close_price:,.0f} 원", delta=f"{price_diff:,.0f} 원 ({pct_change:+.2f}%)")
     with m2: st.metric(label="거래량", value=f"{volume:,.0f} 주")
-    with m3: st.metric(label="RSI (14일)", value=f"{rsi:.2f}")
+    with m3: st.metric(label="RSI (14일)", value=f"{rsi:.2f}" if not np.isnan(rsi) else "N/A")
     with m4: st.metric(label="52주 최고가", value=f"{high_52w:,.0f} 원")
     st.divider()
 
@@ -237,8 +309,6 @@ def visualize_candlestick(df):
     df_reset = df.reset_index().rename(columns={'index': 'Date'})
     
     # [핵심 해결책] 캔들 너비를 '픽셀'이 아닌 '시간 간격'으로 정의합니다.
-    # 하루(24시간) 중 약 18시간(±9시간)을 몸통 너비로 씁니다. 
-    # 이렇게 하면 줌 아웃할 때 캔들도 같이 얇아져서 절대 겹치지 않습니다.
     df_reset['Date_start'] = df_reset['Date'] - pd.Timedelta(hours=9)
     df_reset['Date_end']   = df_reset['Date'] + pd.Timedelta(hours=9)
 
@@ -247,16 +317,17 @@ def visualize_candlestick(df):
         x=alt.X('Date:T', axis=alt.Axis(format='%Y-%m-%d', title='날짜')),
         y=alt.Y('Low:Q', scale=alt.Scale(zero=False), title='주가'),
         y2='High:Q',
+        # 한국 주식 색상 (빨강=상승, 파랑=하락)
         color=alt.condition("datum.Open <= datum.Close", alt.value("#ff0000"), alt.value("#0000ff"))
     )
 
     # 2. 캔들 몸통 (Open-Close) 그리기 (사각형 영역)
-    # mark_bar 대신 mark_rect를 사용하여 시간 범위(Date_start ~ Date_end)를 채웁니다.
     body = alt.Chart(df_reset).mark_rect().encode(
         x='Date_start:T',
         x2='Date_end:T',
         y='Open:Q',
         y2='Close:Q',
+        # 한국 주식 색상 (빨강=상승, 파랑=하락)
         color=alt.condition("datum.Open <= datum.Close", alt.value("#ff0000"), alt.value("#0000ff")),
         tooltip=['Date:T', 'Open', 'High', 'Low', 'Close', 'Volume']
     )
@@ -297,29 +368,29 @@ def visualize_technical_indicators(df):
     df_reset = df.dropna().reset_index().rename(columns={'index': 'Date'})
     
     if df_reset.empty:
-         return alt.Chart(pd.DataFrame({'text': ['유효한 데이터가 없습니다.']})).mark_text().encode(text='text')
+          return alt.Chart(pd.DataFrame({'text': ['유효한 데이터가 없습니다.']})).mark_text().encode(text='text')
 
     # 2. 차트 그리기
     base = alt.Chart(df_reset).encode(x=alt.X('Date:T', axis=alt.Axis(title=None, format='%Y-%m-%d')))
 
     # (1) 볼린저 밴드
     bb_line = base.mark_line(color='black', strokeWidth=1).encode(y=alt.Y('Close:Q', scale=alt.Scale(zero=False), title='주가'))
-    bb_band = base.mark_area(opacity=0.2, color='gray').encode(y='bb_l:Q', y2='bb_h:Q')
+    bb_band = base.mark_area(opacity=0.2, color='#aaccff').encode(y='bb_l:Q', y2='bb_h:Q') # 밴드 색상 변경
     chart_bb = (bb_line + bb_band).properties(height=250, title="볼린저 밴드 (가격 변동폭)")
 
     # (2) MACD (상승=빨강, 하락=파랑)
     macd_line = base.mark_line(color='grey').encode(y='macd:Q')
-    sig_line = base.mark_line(color='orange').encode(y='macd_signal:Q')
+    sig_line = base.mark_line(color='#ff9999').encode(y='macd_signal:Q') # 시그널 색상 변경
     hist_bar = base.mark_bar().encode(
         y=alt.Y('macd_diff:Q', title='MACD Diff'),
-        color=alt.condition(alt.datum.macd_diff > 0, alt.value("#ff9999"), alt.value("#aaccff"))
+        color=alt.condition(alt.datum.macd_diff > 0, alt.value("#ff0000"), alt.value("#0000ff")) # 막대 색상 명확화
     )
     chart_macd = (hist_bar + macd_line + sig_line).properties(height=150, title="MACD (추세 강도)")
 
     # (3) RSI
-    rsi_line = base.mark_line(color='purple').encode(y=alt.Y('rsi:Q', scale=alt.Scale(domain=[0, 100]), title='RSI'))
-    rsi_rule_high = alt.Chart(pd.DataFrame({'y': [70]})).mark_rule(color='red', strokeDash=[3,3]).encode(y='y')
-    rsi_rule_low = alt.Chart(pd.DataFrame({'y': [30]})).mark_rule(color='blue', strokeDash=[3,3]).encode(y='y')
+    rsi_line = base.mark_line(color='#4a90e2').encode(y=alt.Y('rsi:Q', scale=alt.Scale(domain=[0, 100]), title='RSI')) # 선 색상 변경
+    rsi_rule_high = alt.Chart(pd.DataFrame({'y': [70]})).mark_rule(color='#ff0000', strokeDash=[3,3]).encode(y='y')
+    rsi_rule_low = alt.Chart(pd.DataFrame({'y': [30]})).mark_rule(color='#0000ff', strokeDash=[3,3]).encode(y='y')
     chart_rsi = (rsi_line + rsi_rule_high + rsi_rule_low).properties(height=150, title="RSI (과열/침체)")
 
     return alt.vconcat(chart_bb, chart_macd, chart_rsi).resolve_scale(x='shared').interactive()
@@ -334,11 +405,11 @@ def visualize_return_analysis(df):
 
     # (1) 누적 수익률 곡선
     cum_chart = alt.Chart(df_reset).mark_area(
-        line={'color':'darkgreen'},
+        line={'color':'#4a90e2'}, # 선 색상 변경
         color=alt.Gradient(
             gradient='linear',
             stops=[alt.GradientStop(color='white', offset=0),
-                   alt.GradientStop(color='darkgreen', offset=1)],
+                   alt.GradientStop(color='#aaccff', offset=1)], # 채우기 색상 변경
             x1=1, x2=1, y1=1, y2=0
         )
     ).encode(
@@ -351,7 +422,7 @@ def visualize_return_analysis(df):
     hist_chart = alt.Chart(df_reset).mark_bar().encode(
         x=alt.X('Daily_Ret:Q', bin=alt.Bin(maxbins=50), title='일별 등락률'),
         y=alt.Y('count()', title='빈도수'),
-        color=alt.value('purple')
+        color=alt.value('#4a90e2') # 막대 색상 변경
     ).properties(height=200, title="일별 등락률 분포 (Histogram)")
 
     return alt.vconcat(cum_chart, hist_chart)
@@ -361,10 +432,6 @@ def visualize_return_analysis(df):
 def visualize_phases_altair_all_interactions(df, pinpoints_df=None):
     """
     Altair의 4가지 주요 상호작용을 모두 포함하는 차트를 생성합니다.
-    1. 툴팁 (Tooltip)
-    2. 하이라이트 (Highlight on Mouseover)
-    3. 선택 (Selection on Click)
-    4. 브러시 & 필터 (Interval Brush & Cross-filtering)
     """
     
     # --- 1. 데이터 준비 ---
@@ -406,7 +473,7 @@ def visualize_phases_altair_all_interactions(df, pinpoints_df=None):
             # 1. 어떤 구간인지 정의 (순서 중요!)
             domain = ['상승', '하락', '박스권']
             
-            # 2. 각 구간별 색상 지정 (은은한 파스텔톤)
+            # 2. 각 구간별 색상 지정 (은은한 파스텔톤 유지)
             # 상승(빨강) / 하락(파랑) / 박스권(회색)
             range_ = ['#ff9999', '#aaccff', '#d9d9d9'] 
 
@@ -414,8 +481,8 @@ def visualize_phases_altair_all_interactions(df, pinpoints_df=None):
                 x=alt.X('start_date:T', title='날짜'), 
                 x2=alt.X2('end_date:T'),
                 color=alt.Color('Phase:N', 
-                                scale=alt.Scale(domain=domain, range=range_),  # <-- 이 부분이 새로 추가된 핵심입니다!
-                                legend=alt.Legend(title='추세 구간')),
+                                 scale=alt.Scale(domain=domain, range=range_), 
+                                 legend=alt.Legend(title='추세 구간')),
                 tooltip=['start_date:T', 'end_date:T', 'Phase:N']
             )
 
@@ -453,7 +520,9 @@ def visualize_phases_altair_all_interactions(df, pinpoints_df=None):
             points = alt.Chart(merged_pins).mark_point(
                 filled=True,
                 stroke='black',
-                strokeWidth=0.5
+                strokeWidth=0.5,
+                color='gold', # 핀포인트 색상 강조
+                size=100
             ).transform_calculate(
                 pin_y_position=f"{target_y_value}"  # 계산된 Y 위치 사용
             ).encode(
@@ -464,13 +533,11 @@ def visualize_phases_altair_all_interactions(df, pinpoints_df=None):
                 tooltip=[
                     alt.Tooltip('Date:T', title='날짜', format='%Y-%m-%d'),
                     alt.Tooltip('Event:N', title='이벤트')
-                    #,
-                    #alt.Tooltip('Close:Q', title='종가', format=',.2f')
                 ],
                 
                 # 2. 하이라이트 (Highlight): 마우스 오버 시 크기 변경
                 size=alt.condition(hover_selection, 
-                                 alt.value(200),alt.value(100)  # 마우스 올리면 200, 평상시 100
+                                   alt.value(250),alt.value(100)  # 마우스 올리면 250, 평상시 100
                 )
             ).add_params(hover_selection)
             
@@ -493,17 +560,14 @@ def visualize_phases_altair_all_interactions(df, pinpoints_df=None):
 
 
 # ----------------------------------------------------------------------
-# 5. Streamlit 앱 메인 로직
+# 5. Streamlit 앱 메인 로직 (레이아웃 및 제목 수정)
 # ----------------------------------------------------------------------
-st.set_page_config(layout="wide") # 페이지를 넓게 사용
-st.title("주가 추세 구간화 알고리즘 (구간화 알고리즘_최종1차)")
+st.title("주가 추세 구간화 분석기") # 제목 간결화
 
 cols = st.columns([1, 3])
 
-left_cell = cols[0].container(
-    border=True, height="stretch", vertical_alignment="center"
-)
-
+# 좌측 컨테이너 (파라미터 설정)
+left_cell = cols[0].container()
 
 STOCKS = [
     "005930",
@@ -530,19 +594,22 @@ except ValueError:
     default_index = 0 # 기본값이 옵션에 없으면 0번째(첫 번째) 항목 선택
     
 with left_cell:
-    st.markdown("### 주가 구간화 알고리즘")
-    # --- 사이드바: 사용자 입력 ---
+    st.markdown("### 🛠️ 분석 파라미터")
+    # --- 종목 선택 ---
     ticker = st.selectbox(
         "종목 선택",
         options=all_options,
         index=all_options.index(st.session_state.tickers_input[0]),
         placeholder="종목 코드를 입력하세요 (예: 005930)"
     )
-    with st.expander("### 📈 기간 설정"):
+    
+    st.markdown("---") # 구분선 추가
+
+    with st.expander("### 📅 기간 설정", expanded=True):
         start_date = st.date_input("시작일", pd.to_datetime("2024-01-01"))
         end_date = st.date_input("종료일", pd.to_datetime("2024-12-31"))
 
-    with st.expander("### ⚙️ 구간화 파라미터"):
+    with st.expander("### ⚙️ 알고리즘 파라미터"):
         # 노트북 Cell 7의 파라미터들
         window_length = st.number_input("스무딩 윈도우 (홀수)",min_value=3,max_value=21,value=5,step=2)
         polyorder = st.slider("스무딩 다항식 차수", 1, 5, 3)
@@ -553,9 +620,8 @@ with left_cell:
         box_window = st.slider("박스권 판정 윈도우", 1, 20, 10)
 
 
-right_cell = cols[1].container(
-    border=True, height="stretch", vertical_alignment="center"
-)
+# 우측 컨테이너 (결과 출력)
+right_cell = cols[1].container()
 
 
 with right_cell:
@@ -565,20 +631,22 @@ with right_cell:
         df_raw = load_data(ticker, start_date, end_date)
         
         if df_raw is not None and not df_raw.empty:
+            
             # 상단 주요 지표
+            st.markdown("## 📊 종목 개요 및 주요 지표")
             display_metrics(df_raw)
             
             # 탭 4개 구성
-            tab1, tab2, tab3, tab4 = st.tabs(["📈 기본 시세", "🧠 AI 추세 분석", "📐 기술적 지표", "📊 수익률 분석"])
+            tab1, tab2, tab3, tab4 = st.tabs(["📈 캔들 시세", "🧠 AI 추세", "⚙️ 기술 지표", "📈 수익률"])
             
-            # [Tab 1] 캔들스틱 (기존)
+            # [Tab 1] 캔들스틱 
             with tab1:
                 candle_chart = visualize_candlestick(df_raw)
                 st.altair_chart(candle_chart, use_container_width=True)
-                st.subheader("일별 시세 데이터")
+                st.subheader("📝 일별 데이터")
                 st.dataframe(df_raw.sort_index(ascending=False).head(10), use_container_width=True)
 
-            # [Tab 2] 알고리즘 분석 (기존)
+            # [Tab 2] 알고리즘 분석 
             with tab2:
                 if len(df_raw) < window_length:
                     st.warning(f"데이터 부족: 최소 {window_length}일 이상 필요합니다.")
@@ -588,6 +656,7 @@ with right_cell:
                             df_raw, window_length, polyorder, min_days1, min_days2, adjust_window, min_hits, box_window
                         )
                     
+                    st.subheader("🤖 AI 추세 구간 분석 결과")
                     fig = visualize_phases_altair_all_interactions(df_processed, pinpoints_df=pinpoints_df)
                     st.altair_chart(fig, use_container_width=True)
                     
@@ -599,14 +668,14 @@ with right_cell:
                         c2.metric("하락 구간", f"{counts.get('하락', 0)}일")
                         c3.metric("박스권", f"{counts.get('박스권', 0)}일")
                     
-                    st.subheader("뉴스 이벤트 매칭")
+                    st.subheader("📰 뉴스 이벤트 매칭")
                     st.dataframe(pinpoints_df, use_container_width=True, hide_index=True)
 
-            # [Tab 3] 기술적 지표 (복구됨 + 상세 설명 포함)
+            # [Tab 3] 기술적 지표
             with tab3:
                 st.subheader("📐 기술적 지표 분석")
                 
-                # 1. 초보자용 요약
+                # 1. 초보자용 요약 (유지)
                 st.info("""
                 **💡 초보자를 위한 1분 요약**
                 * **볼린저 밴드:** 주가가 회색 띠를 벗어나면 다시 돌아오려는 성질이 있어요. (밴드 상단=비쌈, 하단=쌈)
@@ -618,33 +687,35 @@ with right_cell:
                 tech_chart = visualize_technical_indicators(df_raw)
                 st.altair_chart(tech_chart, use_container_width=True)
                 
-                # 3. 상세 설명 (Expander) - 여기 다시 추가했습니다!
+                # 3. 상세 설명 (Expander) (유지)
                 with st.expander("📚 지표 상세 해석 가이드 (눌러서 보기)"):
                     st.markdown("""
                     ### 1. 볼린저 밴드 (Bollinger Bands)
                     - **무엇인가요?** 주가가 다니는 '길'이라고 생각하세요. 
                     - **해석법:** 주가는 보통 밴드 안에서 움직입니다. 
-                        - 캔들이 **위쪽 선**을 치면? 단기 고점일 수 있습니다. (매도 고려)
-                        - 캔들이 **아래쪽 선**을 치면? 단기 저점일 수 있습니다. (매수 고려)
+                         - 캔들이 **위쪽 선**을 치면? 단기 고점일 수 있습니다. (매도 고려)
+                         - 캔들이 **아래쪽 선**을 치면? 단기 저점일 수 있습니다. (매수 고려)
                     
                     ### 2. MACD (추세)
                     - **무엇인가요?** 주가의 '방향'과 '에너지'를 보여줍니다.
                     - **해석법:** - **빨간 막대**가 점점 길어지면 상승 힘이 강해지는 것입니다.
-                        - **파란 막대**가 줄어들면서 빨간색으로 바뀌려는 순간이 '매수 타이밍'으로 불립니다.
+                         - **파란 막대**가 줄어들면서 빨간색으로 바뀌려는 순간이 '매수 타이밍'으로 불립니다.
                     
                     ### 3. RSI (상대강도지수)
                     - **무엇인가요?** 시장의 '과열' 여부를 0~100 점수로 매긴 것입니다.
                     - **해석법:**
-                        - **70 이상 (점선 위):** "너무 뜨겁다!" 사람들이 너무 많이 사서 비싼 상태일 수 있습니다. (조심!)
-                        - **30 이하 (점선 아래):** "너무 차갑다!" 사람들이 너무 많이 팔아서 싼 상태일 수 있습니다. (기회?)
+                         - **70 이상 (점선 위):** "너무 뜨겁다!" 사람들이 너무 많이 사서 비싼 상태일 수 있습니다. (조심!)
+                         - **30 이하 (점선 아래):** "너무 차갑다!" 사람들이 너무 많이 팔아서 싼 상태일 수 있습니다. (기회?)
                     """)
 
-            # [Tab 4] 수익률 분석 (복구됨)
+            # [Tab 4] 수익률 분석
             with tab4:
                 st.subheader("📊 수익률 퍼포먼스")
                 st.caption("이 기간 동안 보유했을 때의 누적 수익률과 변동성입니다.")
                 return_chart = visualize_return_analysis(df_raw)
                 st.altair_chart(return_chart, use_container_width=True)
 
+        else:
+            st.info("좌측 사이드바에서 분석할 종목을 선택하고 기간을 설정해주세요.")
     else:
         st.info("좌측 사이드바에서 분석할 종목을 선택해주세요.")

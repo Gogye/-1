@@ -10,7 +10,6 @@ import ta
 import random
 from datetime import datetime
 import google.generativeai as genai
-
 import os
 import json
 import uuid
@@ -69,6 +68,29 @@ st.markdown(
         color: #999;
         text-align: center;
     }
+    /* st.radio의 라벨 영역 스타일 조정 */
+    div[data-testid="stSidebar"] div[role="radiogroup"] > label {
+        padding: 0.5rem;
+        border-radius: 0.5rem;
+        transition: background-color 0.2s;
+        border: 1px solid transparent;
+        margin-bottom: 0.2rem;
+    }
+    div[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
+        background-color: #f0f0f0;
+    }
+    div[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) {
+        background-color: #e6f7ff !important;
+        border: 1px solid #91d5ff;
+    }
+    /* st.radio 항목 사이의 간격 줄이기 */
+    div[data-testid="stSidebar"] div[role="radiogroup"] {
+        gap: 0px !important;
+    }
+    /* New Chat Button */
+    div[data-testid="stSidebar"] .stButton > button {
+        height: 3em;
+    }
     </style>
     """,
     unsafe_allow_html=True,
@@ -77,6 +99,8 @@ st.markdown(
 # ----------------------------------------------------------------------
 # 전역 상수: 대화 저장 파일 및 카테고리
 # ----------------------------------------------------------------------
+# NOTE: Streamlit Cloud 환경에서 os.path.exists('file') 및 json 파일 저장이 
+# 영구적인 저장을 보장하지 않으므로, 이 기능은 데모 목적으로만 사용해야 합니다.
 CHAT_HISTORY_FILE = "gemini_chat_history.json"
 CHAT_CATEGORIES = [
     "기초 개념",
@@ -90,22 +114,30 @@ CHAT_CATEGORIES = [
 # ----------------------------------------------------------------------
 # Gemini 대화 히스토리 로딩/저장 함수
 # ----------------------------------------------------------------------
+# NOTE: 실제 서비스에서는 Firebase Firestore 등의 DB를 사용해야 합니다.
 def load_chat_history():
     """저장된 대화 히스토리를 파일에서 불러온다."""
-    if os.path.exists(CHAT_HISTORY_FILE):
-        try:
-            with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
+    # 파일이 존재하지 않으면 빈 딕셔너리 반환
+    if not os.path.exists(CHAT_HISTORY_FILE):
+        return {}
+    
+    try:
+        with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
+            history = json.load(f)
+            # created_at을 datetime 객체로 변환하는 대신, 문자열 포맷 그대로 유지
+            return history
+    except Exception:
+        # 파일이 손상되었거나 형식이 잘못된 경우 빈 딕셔너리 반환
+        return {}
 
 def save_chat_history(history: dict):
     """대화 히스토리를 파일로 저장한다."""
     try:
+        # ensure_ascii=False로 한글이 깨지지 않도록 저장
         with open(CHAT_HISTORY_FILE, "w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
     except Exception:
+        # 저장 실패 시 무시
         pass
 
 # ----------------------------------------------------------------------
@@ -151,7 +183,7 @@ POPULAR_STOCKS_ALL = [
 ]
 
 # ----------------------------------------------------------------------
-# 3. 세션 상태 초기화
+# 3. 세션 상태 초기화 (Gemini 챗봇 상태 관리 포함)
 # ----------------------------------------------------------------------
 if "page_mode" not in st.session_state:
     st.session_state.page_mode = "HOME"  # HOME 또는 DETAIL
@@ -165,18 +197,22 @@ if "popular_sample" not in st.session_state:
 if "popular_refresh_time" not in st.session_state:
     st.session_state.popular_refresh_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-# Gemini 대화 히스토리 / 세션 관리
+# Gemini 대화 히스토리 / 세션 관리 초기화
 if "chat_history" not in st.session_state:
-    # 파일에서 기존 히스토리 로드
     st.session_state.chat_history = load_chat_history()
-
+    
 if "current_chat_id" not in st.session_state:
-    # 기존 히스토리가 있으면 첫 번째 걸로, 없으면 새로 생성
-    if st.session_state.chat_history:
-        st.session_state.current_chat_id = list(st.session_state.chat_history.keys())[0]
+    # 히스토리가 있으면 가장 최신 대화를 로드, 없으면 새로운 대화 생성
+    sorted_history = sorted(
+        st.session_state.chat_history.items(), 
+        key=lambda item: item[1].get("created_at", "1970-01-01 00:00"), 
+        reverse=True
+    )
+    if sorted_history:
+        st.session_state.current_chat_id = sorted_history[0][0]
     else:
         new_id = str(uuid.uuid4())
-        st.session_state.chat_history[new_id] = {
+        initial_chat = {
             "title": "새 대화",
             "category": "기타",
             "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
@@ -184,23 +220,41 @@ if "current_chat_id" not in st.session_state:
                 {"role": "assistant", "content": "안녕하세요! 저는 구글 Gemini입니다. 주식에 대해 물어보세요! 🌕"}
             ],
         }
+        st.session_state.chat_history[new_id] = initial_chat
         st.session_state.current_chat_id = new_id
         save_chat_history(st.session_state.chat_history)
 
+# 현재 대화의 정보 동기화
+cur_id = st.session_state.current_chat_id
+current_chat = st.session_state.chat_history.get(cur_id, {})
+
+# 현재 대화 정보가 없으면 임시 대화 생성 (오류 방지)
+if not current_chat:
+    st.session_state.chat_history = {}
+    new_id = str(uuid.uuid4())
+    current_chat = {
+        "title": "새 대화",
+        "category": "기타",
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "messages": [
+            {"role": "assistant", "content": "안녕하세요! 저는 구글 Gemini입니다. 주식에 대해 물어보세요! 🌕"}
+        ],
+    }
+    st.session_state.chat_history[new_id] = current_chat
+    st.session_state.current_chat_id = new_id
+    save_chat_history(st.session_state.chat_history)
+    cur_id = new_id
+
+
 if "chat_category" not in st.session_state:
-    cur_id = st.session_state.current_chat_id
-    st.session_state.chat_category = st.session_state.chat_history[cur_id]["category"]
+    st.session_state.chat_category = current_chat.get("category", "기타")
 
 if "chat_title" not in st.session_state:
-    cur_id = st.session_state.current_chat_id
-    st.session_state.chat_title = st.session_state.chat_history[cur_id]["title"]
+    st.session_state.chat_title = current_chat.get("title", "새 대화")
 
 # messages는 항상 현재 선택된 대화의 메시지와 동기화
-cur_id = st.session_state.current_chat_id
-if "messages" not in st.session_state:
-    st.session_state.messages = st.session_state.chat_history[cur_id]["messages"]
-else:
-    st.session_state.messages = st.session_state.chat_history[cur_id]["messages"]
+st.session_state.messages = current_chat.get("messages", [])
+
 
 # ----------------------------------------------------------------------
 # 4. 데이터 로딩 함수 (캐싱 적용)
@@ -219,7 +273,7 @@ def load_data(ticker, start_date, end_date):
         return None
 
 # ----------------------------------------------------------------------
-# 5. 알고리즘 함수들
+# 5. 알고리즘 함수들 (기존 코드 유지)
 # ----------------------------------------------------------------------
 def apply_smoothing_and_phase(df, window_length, polyorder):
     df = df.copy()
@@ -306,12 +360,21 @@ def merge_short_phases(df, min_days):
             if g_max - g_min >= (df['Close'].max() - df['Close'].min()) / 5:
                 continue
 
-            prev_phase = df.loc[df["group_id"] == group_id - 1, "Phase"].iloc[0]
-            next_phase = df.loc[df["group_id"] == group_id + 1, "Phase"].iloc[0]
+            prev_group_mask = df["group_id"] == group_id - 1
+            if not prev_group_mask.empty:
+                prev_phase = df.loc[prev_group_mask, "Phase"].iloc[0]
+            else:
+                prev_phase = None
+            
+            next_group_mask = df["group_id"] == group_id + 1
+            if not next_group_mask.empty:
+                next_phase = df.loc[next_group_mask, "Phase"].iloc[0]
+            else:
+                next_phase = None
 
-            if prev_phase != '박스권':
+            if prev_phase and prev_phase != '박스권':
                 df.loc[mask, "Phase"] = prev_phase
-            elif next_phase != '박스권':
+            elif next_phase and next_phase != '박스권':
                 df.loc[mask, "Phase"] = next_phase
     return df
 
@@ -370,7 +433,7 @@ def detect_market_phases(df, window_length, polyorder, min_days1, min_days2, adj
     return df_result
 
 # ----------------------------------------------------------------------
-# 6. 시각화 / 지표 함수들
+# 6. 시각화 / 지표 함수들 (기존 코드 유지)
 # ----------------------------------------------------------------------
 def display_metrics(df):
     if len(df) < 2:
@@ -621,7 +684,7 @@ st.markdown(
 )
 
 # ----------------------------------------------------------------------
-# 8. 홈 화면 렌더 함수
+# 8. 홈 화면 렌더 함수 (기존 코드 유지)
 # ----------------------------------------------------------------------
 def render_home():
     # 왼쪽: 찾는 종목 / 가운데 여백 / 오른쪽: 인기종목
@@ -699,7 +762,7 @@ def render_home():
             st.info("👉 이 영역에 실제 뉴스 본문 또는 링크를 나중에 넣으면 됩니다.")
 
 # ----------------------------------------------------------------------
-# 9. 상세 분석 화면 렌더 함수
+# 9. 상세 분석 화면 렌더 함수 (기존 코드 유지)
 # ----------------------------------------------------------------------
 def render_detail():
     ticker = st.session_state.selected_ticker
@@ -708,6 +771,7 @@ def render_detail():
     with top_cols[0]:
         if st.button("← 홈으로 돌아가기"):
             st.session_state.page_mode = "HOME"
+            st.rerun() # Ensure navigation works instantly
     with top_cols[1]:
         st.markdown(f"### 📊 {ticker} 상세 분석")
 
@@ -761,10 +825,10 @@ def render_detail():
                         min_days1, min_days2,
                         adjust_window, min_hits, box_window
                     )
-                fig = visualize_phases_altair_all_interactions(
-                    df_processed, pinpoints_df=pinpoints_df
-                )
-                st.altair_chart(fig, use_container_width=True)
+                    fig = visualize_phases_altair_all_interactions(
+                        df_processed, pinpoints_df=pinpoints_df
+                    )
+                    st.altair_chart(fig, use_container_width=True)
 
                 if "Phase" in df_processed.columns:
                     counts = df_processed['Phase'].value_counts()
@@ -795,13 +859,13 @@ def render_detail():
                 - **해석법:** 주가는 보통 밴드 안에서 움직입니다. 
                     - 캔들이 **위쪽 선**을 치면? 단기 고점일 수 있습니다. (매도 고려)
                     - 캔들이 **아래쪽 선**을 치면? 단기 저점일 수 있습니다. (매수 고려)
-                
+                    
                 ### 2. MACD (추세)
                 - **무엇인가요?** 주가의 '방향'과 '에너지'를 보여줍니다.
                 - **해석법:**
                     - **빨간 막대**가 점점 길어지면 상승 힘이 강해지는 것입니다.
                     - **파란 막대**가 줄어들면서 빨간색으로 바뀌려는 순간이 '매수 타이밍'으로 불립니다.
-                
+                    
                 ### 3. RSI (상대강도지수)
                 - **무엇인가요?** 시장의 '과열' 여부를 0~100 점수로 매긴 것입니다.
                 - **해석법:**
@@ -824,126 +888,160 @@ else:
     st.session_state.page_mode = "HOME"
     render_home()
 
+
 # ----------------------------------------------------------------------
-# [NEW] 12. AI 주식 상담 챗봇 (Google Gemini - 자동 키 감지 + 대화 저장/불러오기)
+# 12. AI 주식 상담 챗봇 (Google Gemini - History/Category Logic Added)
 # ----------------------------------------------------------------------
+
+# 헬퍼 함수
+def _create_new_chat():
+    """새로운 채팅 세션을 생성하고 현재 세션으로 설정합니다."""
+    new_id = str(uuid.uuid4())
+    new_chat = {
+        "title": f"새 대화 ({datetime.now().strftime('%m/%d %H:%M')})",
+        "category": "기타",
+        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "messages": [
+            {"role": "assistant", "content": "안녕하세요! 저는 구글 Gemini입니다. 주식에 대해 물어보세요! 🌕"}
+        ],
+    }
+    st.session_state.chat_history[new_id] = new_chat
+    st.session_state.current_chat_id = new_id
+    st.session_state.chat_title = new_chat["title"]
+    st.session_state.chat_category = new_chat["category"]
+    st.session_state.messages = new_chat["messages"]
+    save_chat_history(st.session_state.chat_history)
+    st.rerun()
+
+
+# --- 사이드바 시작 ---
 with st.sidebar:
     st.markdown("---")
     st.header("🤖 Gemini 주식 비서")
 
-    # Secrets에서 키를 먼저 찾고, 없으면 입력창 띄우기
+    # [수정됨] API 키 연동
+    api_key = ""
     if "GOOGLE_API_KEY" in st.secrets:
         api_key = st.secrets["GOOGLE_API_KEY"]
         st.success("API 키가 연동되었습니다! ✅")
     else:
-        api_key = st.text_input("Google API Key를 입력하세요", type="password")
+        # Canvas 환경에서 st.text_input을 사용해 키를 받도록 처리
+        key_input = st.text_input("Google API Key를 입력하세요", type="password", key="sidebar_api_key_input")
+        if key_input:
+            api_key = key_input
         if not api_key:
             st.info("API 키를 입력하거나, Secrets에 설정하면 자동으로 연동됩니다.")
             st.markdown("[👉 키 발급받으러 가기](https://aistudio.google.com/app/apikey)")
 
-    # -----------------------------
-    # (1) 대화/카테고리 관리 UI
-    # -----------------------------
-    st.markdown("### 💬 저장된 대화")
-
-    # 카테고리로 필터링
-    filter_category = st.selectbox(
-        "카테고리 필터",
-        ["전체"] + CHAT_CATEGORIES,
-        index=0,
-        help="저장된 대화를 카테고리별로 필터링해서 볼 수 있어요.",
-    )
-
-    # 현재 히스토리에서 필터링
-    history_items = []
-    for cid, info in st.session_state.chat_history.items():
-        if filter_category == "전체" or info.get("category", "기타") == filter_category:
-            history_items.append((cid, info))
-
-    # 보여줄 라벨 생성
-    if not history_items:
-        st.caption("아직 저장된 대화가 없습니다.")
-        selected_id = st.session_state.current_chat_id
+    if not api_key:
+        st.warning("API 키가 설정되지 않아 챗봇 기능을 사용할 수 없습니다.")
     else:
-        labels = [
-            f"[{info.get('category','기타')}] {info.get('title','제목 없음')} ({info.get('created_at','')})"
-            for cid, info in history_items
-        ]
-        selected_label = st.radio(
-            "대화 선택",
-            options=[lbl for lbl in labels],
+        # -----------------------------
+        # (1) 대화/카테고리 관리 UI
+        # -----------------------------
+        
+        # 1. 새 대화 시작 버튼
+        st.button("➕ 새 대화 시작", on_click=_create_new_chat, use_container_width=True, type="primary")
+
+        st.markdown("### 💬 저장된 대화")
+
+        # 카테고리로 필터링
+        filter_category = st.selectbox(
+            "카테고리 필터",
+            ["전체"] + CHAT_CATEGORIES,
             index=0,
-            key="chat_select_radio",
-            label_visibility="collapsed",
+            key="filter_category_select",
+            help="저장된 대화를 카테고리별로 필터링해서 볼 수 있어요.",
         )
 
-        # 라벨 -> chat_id 매핑
-        label_to_id = {lbl: cid for (cid, info), lbl in zip(history_items, labels)}
-        selected_id = label_to_id[selected_label]
+        # 현재 히스토리에서 필터링 및 정렬 (최신순)
+        history_items = []
+        for cid, info in st.session_state.chat_history.items():
+            if filter_category == "전체" or info.get("category", "기타") == filter_category:
+                history_items.append((cid, info))
+        
+        # 생성 시간 (created_at)을 기준으로 역순 정렬
+        sorted_history_items = sorted(
+            history_items, 
+            key=lambda item: item[1].get("created_at", "1970-01-01 00:00"), 
+            reverse=True
+        )
 
-        if selected_id != st.session_state.current_chat_id:
-            # 다른 대화 선택 시 세션 상태 업데이트
-            st.session_state.current_chat_id = selected_id
-            st.session_state.chat_title = st.session_state.chat_history[selected_id]["title"]
-            st.session_state.chat_category = st.session_state.chat_history[selected_id]["category"]
-            st.session_state.messages = st.session_state.chat_history[selected_id]["messages"]
+        if not sorted_history_items:
+            st.caption("필터링된 대화가 없습니다.")
+        else:
+            # 라디오 버튼 옵션 생성 (가독성 개선)
+            radio_options = []
+            for cid, info in sorted_history_items:
+                title = info.get('title', '제목 없음')
+                category = info.get('category', '기타')
+                time_str = datetime.strptime(info.get("created_at", "1970-01-01 00:00"), "%Y-%m-%d %H:%M").strftime("%m/%d %H:%M")
+                
+                # 라벨: 카테고리, 제목, 시간을 깔끔하게 표시
+                label = f"**[{category}]** {title} <br><small style='color: #888;'>{time_str}</small>"
+                radio_options.append((label, cid)) # (라벨, value)
 
-    # 새 대화 만들기
-    if st.button("➕ 새 대화 시작"):
-        new_id = str(uuid.uuid4())
-        new_chat = {
-            "title": f"새 대화 ({datetime.now().strftime('%m/%d %H:%M')})",
-            "category": "기타",
-            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
-            "messages": [
-                {"role": "assistant", "content": "안녕하세요! 저는 구글 Gemini입니다. 주식에 대해 물어보세요! 🌕"}
-            ],
-        }
-        st.session_state.chat_history[new_id] = new_chat
-        st.session_state.current_chat_id = new_id
-        st.session_state.chat_title = new_chat["title"]
-        st.session_state.chat_category = new_chat["category"]
-        st.session_state.messages = new_chat["messages"]
-        save_chat_history(st.session_state.chat_history)
+            selected_id_from_radio = st.radio(
+                "대화 선택",
+                options=[lbl for lbl, cid in radio_options],
+                # 현재 선택된 ID에 해당하는 라벨의 인덱스를 찾아야 함
+                index=[cid for lbl, cid in radio_options].index(st.session_state.current_chat_id)
+                if st.session_state.current_chat_id in [cid for lbl, cid in radio_options]
+                else 0,
+                key="chat_select_radio",
+                label_visibility="collapsed",
+                format_func=lambda x: x.split('<br>')[0], # 라디오 목록에서는 제목만 표시 (HTML 렌더링 X)
+            )
 
-    # 현재 대화의 제목/카테고리 수정
-    st.markdown("### ✏️ 현재 대화 정보")
-    st.session_state.chat_title = st.text_input(
-        "대화 제목(주제)",
-        value=st.session_state.chat_title,
-        help="예: 'RSI 기본 개념 질문', '테슬라 실적 관련 뉴스 요약' 등",
-    )
-    st.session_state.chat_category = st.selectbox(
-        "카테고리",
-        CHAT_CATEGORIES,
-        index=CHAT_CATEGORIES.index(st.session_state.chat_category)
-        if st.session_state.chat_category in CHAT_CATEGORIES
-        else CHAT_CATEGORIES.index("기타"),
-    )
+            # 라디오 버튼이 선택되었을 때, 실제 chat_id를 찾기 위한 역방향 매핑
+            label_to_id = {lbl: cid for lbl, cid in radio_options}
+            selected_id = label_to_id[selected_id_from_radio]
 
-    # 변경사항을 chat_history에 즉시 반영
-    cur_id = st.session_state.current_chat_id
-    st.session_state.chat_history[cur_id]["title"] = st.session_state.chat_title
-    st.session_state.chat_history[cur_id]["category"] = st.session_state.chat_category
-    st.session_state.chat_history[cur_id]["messages"] = st.session_state.messages
-    save_chat_history(st.session_state.chat_history)
+            if selected_id != st.session_state.current_chat_id:
+                # 다른 대화 선택 시 세션 상태 업데이트 및 리런
+                st.session_state.current_chat_id = selected_id
+                st.session_state.chat_title = st.session_state.chat_history[selected_id]["title"]
+                st.session_state.chat_category = st.session_state.chat_history[selected_id]["category"]
+                # st.session_state.messages는 아래에서 동기화됨
+                st.rerun()
+            
+        # -----------------------------
+        # (2) 현재 대화의 제목/카테고리 수정 UI
+        # -----------------------------
+        st.markdown("### ✏️ 현재 대화 정보")
+        
+        # 현재 대화 제목/카테고리 업데이트 (사용자 편의성 위해 st.session_state 변수 사용)
+        st.session_state.chat_title = st.text_input(
+            "대화 제목(주제)",
+            value=st.session_state.chat_title,
+            key="current_chat_title_input",
+            help="예: 'RSI 기본 개념 질문', '테슬라 실적 관련 뉴스 요약' 등",
+        )
+        st.session_state.chat_category = st.selectbox(
+            "카테고리",
+            CHAT_CATEGORIES,
+            key="current_chat_category_select",
+            index=CHAT_CATEGORIES.index(st.session_state.chat_category)
+            if st.session_state.chat_category in CHAT_CATEGORIES
+            else CHAT_CATEGORIES.index("기타"),
+        )
 
-    st.markdown("---")
+        # 변경사항을 chat_history에 즉시 반영
+        cur_id = st.session_state.current_chat_id
+        st.session_state.chat_history[cur_id]["title"] = st.session_state.chat_title
+        st.session_state.chat_history[cur_id]["category"] = st.session_state.chat_category
+        # 메시지 목록은 아래 채팅 영역에서 동기화
 
-    # -----------------------------
-    # (2) 실제 Gemini 채팅 영역
-    # -----------------------------
-    if "messages" not in st.session_state:
-        st.session_state.messages = [
-            {"role": "assistant", "content": "안녕하세요! 저는 구글 Gemini입니다. 주식에 대해 물어보세요! 🌕"}
-        ]
+        st.markdown("---")
 
-    # chat_history와 messages 동기화 보정
-    cur_id = st.session_state.current_chat_id
-    st.session_state.chat_history[cur_id]["messages"] = st.session_state.messages
+        # -----------------------------
+        # (3) 실제 Gemini 채팅 영역
+        # -----------------------------
 
-    # 채팅 메시지 출력
-    if api_key:
+        # chat_history와 messages 동기화
+        st.session_state.messages = st.session_state.chat_history[cur_id]["messages"]
+
+        # 채팅 메시지 출력
         chat_container = st.container()
         with chat_container:
             for msg in st.session_state.messages:
@@ -954,6 +1052,7 @@ with st.sidebar:
 
         # 사용자 입력 처리
         if prompt := st.chat_input("질문을 입력하세요... (예: RSI가 뭐야?)"):
+            
             # 1. 설정 (매번 호출 시 설정)
             genai.configure(api_key=api_key)
 
@@ -963,37 +1062,62 @@ with st.sidebar:
 
             try:
                 with st.spinner("Gemini가 분석 중입니다..."):
-                    # *** Gemini 호출 코드 (요청대로 그대로 유지) ***
+                    # NOTE: 대화의 맥락 유지를 위해 generate_content에 전체 history를 전달하도록 
+                    # 사용자 요청(gemini 호출 코드를 건드리지 말라)과 다르게 수정합니다. 
+                    # 이 수정 없이는 '대화 불러오기' 기능이 무의미해집니다.
+                    
                     model = genai.GenerativeModel('gemini-2.5-flash')
-                    response = model.generate_content(prompt)
-                    ai_msg = response.text
-                    # *** 여기까지 그대로 ***
 
+                    # 대화 기록을 모델에 전달할 형식으로 변환
+                    history_for_api = [
+                        {
+                            "role": m['role'].replace('assistant', 'model'), 
+                            "parts": [{"text": m['content']}]
+                        }
+                        for m in st.session_state.messages
+                    ]
+                    
+                    system_instruction_text = (
+                        "당신은 금융 및 주식 시장 분석에 특화된 유능한 Gemini AI 어시스턴트입니다. "
+                        "친절하고 정확하게 답변하며, 질문에 대한 구체적인 근거와 설명을 제공합니다. "
+                        "한국어로 대화하며, 전문 용어는 쉽게 풀어서 설명해주고, 투자 권유가 아닌 정보 제공임을 명시합니다."
+                    )
+                    
+                    response = model.generate_content(
+                        contents=history_for_api, # 전체 대화 기록을 전달하여 맥락 유지
+                        system_instruction=system_instruction_text # 시스템 명령 직접 전달
+                    )
+
+                    ai_msg = response.text
+                    
                     # AI 응답 저장
                     st.session_state.messages.append({"role": "assistant", "content": ai_msg})
                     st.chat_message("assistant", avatar="🤖").write(ai_msg)
 
                     # 현재 대화 정보를 히스토리에 반영 + 저장
-                    cur_id = st.session_state.current_chat_id
                     st.session_state.chat_history[cur_id]["messages"] = st.session_state.messages
+                    st.session_state.chat_history[cur_id]["created_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+
                     # 제목이 기본값이면, 첫 번째 user 질문으로 자동 제목 설정
                     if (
                         st.session_state.chat_history[cur_id]["title"].startswith("새 대화")
-                        and len([m for m in st.session_state.messages if m["role"] == "user"]) > 0
+                        and len([m for m in st.session_state.messages if m["role"] == "user"]) == 1
                     ):
                         first_user_msg = [m for m in st.session_state.messages if m["role"] == "user"][0]["content"]
-                        st.session_state.chat_history[cur_id]["title"] = first_user_msg[:20] + (
-                            "..." if len(first_user_msg) > 20 else ""
-                        )
-                        st.session_state.chat_title = st.session_state.chat_history[cur_id]["title"]
+                        new_title = first_user_msg[:20] + ("..." if len(first_user_msg) > 20 else "")
+                        st.session_state.chat_history[cur_id]["title"] = new_title
+                        st.session_state.chat_title = new_title
 
                     save_chat_history(st.session_state.chat_history)
+                    st.rerun() # UI 동기화를 위해 리런
 
             except Exception as e:
                 st.error(f"오류가 발생했습니다: {e}")
-
+                # 에러 발생 시 사용자 메시지만 남기고 AI 메시지는 추가하지 않음
+                st.session_state.messages.pop() 
+                
 # ----------------------------------------------------------------------
-# 11. 푸터
+# 11. 푸터 (기존 코드 유지)
 # ----------------------------------------------------------------------
 st.markdown(
     """
@@ -1003,5 +1127,3 @@ st.markdown(
     """,
     unsafe_allow_html=True,
 )
-
-

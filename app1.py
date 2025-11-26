@@ -897,10 +897,12 @@ else:
 def _create_new_chat():
     """새로운 채팅 세션을 생성하고 현재 세션으로 설정합니다."""
     new_id = str(uuid.uuid4())
+    # **수정: datetime.now()를 사용하여 실시간 시간 기록**
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
     new_chat = {
         "title": f"새 대화 ({datetime.now().strftime('%m/%d %H:%M')})",
         "category": "기타",
-        "created_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "created_at": now_str,
         "messages": [
             {"role": "assistant", "content": "안녕하세요! 저는 구글 Gemini입니다. 주식에 대해 물어보세요! 🌕"}
         ],
@@ -912,6 +914,33 @@ def _create_new_chat():
     st.session_state.messages = new_chat["messages"]
     save_chat_history(st.session_state.chat_history)
     st.rerun()
+
+# 헬퍼 함수: 대화 삭제
+def _delete_chat(chat_id_to_delete):
+    """지정된 ID의 대화를 삭제하고, 새 대화를 활성화합니다."""
+    if chat_id_to_delete in st.session_state.chat_history:
+        del st.session_state.chat_history[chat_id_to_delete]
+        save_chat_history(st.session_state.chat_history)
+        
+        # 삭제 후 새로운 현재 대화를 설정
+        if st.session_state.chat_history:
+            # 가장 최신 대화로 이동
+            sorted_history = sorted(
+                st.session_state.chat_history.items(),
+                key=lambda item: item[1].get("created_at", "1970-01-01 00:00"),
+                reverse=True
+            )
+            new_current_id = sorted_history[0][0]
+            st.session_state.current_chat_id = new_current_id
+            st.session_state.chat_title = st.session_state.chat_history[new_current_id]["title"]
+            st.session_state.chat_category = st.session_state.chat_history[new_current_id]["category"]
+            st.session_state.messages = st.session_state.chat_history[new_current_id]["messages"]
+        else:
+            # 대화가 하나도 없으면 새 대화 생성
+            _create_new_chat()
+            return # _create_new_chat에서 rerun이 발생하므로 함수 종료
+        
+        st.rerun()
 
 
 # --- 사이드바 시작 ---
@@ -975,19 +1004,25 @@ with st.sidebar:
             for cid, info in sorted_history_items:
                 title = info.get('title', '제목 없음')
                 category = info.get('category', '기타')
+                # **수정: 시간 포맷팅을 좀 더 짧게 변경**
                 time_str = datetime.strptime(info.get("created_at", "1970-01-01 00:00"), "%Y-%m-%d %H:%M").strftime("%m/%d %H:%M")
                 
                 # 라벨: 카테고리, 제목, 시간을 깔끔하게 표시
                 label = f"**[{category}]** {title} <br><small style='color: #888;'>{time_str}</small>"
                 radio_options.append((label, cid)) # (라벨, value)
 
+            # 현재 선택된 대화의 인덱스를 계산 (삭제 후에도 안정적으로 유지)
+            try:
+                current_index = [cid for lbl, cid in radio_options].index(st.session_state.current_chat_id)
+            except ValueError:
+                # 현재 ID가 목록에 없으면 (방금 삭제했거나), 첫 번째 항목 선택
+                current_index = 0
+                st.session_state.current_chat_id = sorted_history_items[0][0]
+
             selected_id_from_radio = st.radio(
                 "대화 선택",
                 options=[lbl for lbl, cid in radio_options],
-                # 현재 선택된 ID에 해당하는 라벨의 인덱스를 찾아야 함
-                index=[cid for lbl, cid in radio_options].index(st.session_state.current_chat_id)
-                if st.session_state.current_chat_id in [cid for lbl, cid in radio_options]
-                else 0,
+                index=current_index,
                 key="chat_select_radio",
                 label_visibility="collapsed",
                 format_func=lambda x: x.split('<br>')[0], # 라디오 목록에서는 제목만 표시 (HTML 렌더링 X)
@@ -1006,7 +1041,7 @@ with st.sidebar:
                 st.rerun()
             
         # -----------------------------
-        # (2) 현재 대화의 제목/카테고리 수정 UI
+        # (2) 현재 대화의 제목/카테고리 수정 및 삭제 UI
         # -----------------------------
         st.markdown("### ✏️ 현재 대화 정보")
         
@@ -1024,6 +1059,14 @@ with st.sidebar:
             index=CHAT_CATEGORIES.index(st.session_state.chat_category)
             if st.session_state.chat_category in CHAT_CATEGORIES
             else CHAT_CATEGORIES.index("기타"),
+        )
+        
+        # **추가: 대화 삭제 버튼**
+        st.button(
+            "🗑️ 현재 대화 삭제", 
+            on_click=_delete_chat, 
+            args=(st.session_state.current_chat_id,), 
+            use_container_width=True
         )
 
         # 변경사항을 chat_history에 즉시 반영
@@ -1062,9 +1105,6 @@ with st.sidebar:
 
             try:
                 with st.spinner("Gemini가 분석 중입니다..."):
-                    # NOTE: 대화의 맥락 유지를 위해 generate_content에 전체 history를 전달하도록 
-                    # 사용자 요청(gemini 호출 코드를 건드리지 말라)과 다르게 수정합니다. 
-                    # 이 수정 없이는 '대화 불러오기' 기능이 무의미해집니다.
                     
                     model = genai.GenerativeModel('gemini-2.5-flash')
 
@@ -1096,6 +1136,7 @@ with st.sidebar:
 
                     # 현재 대화 정보를 히스토리에 반영 + 저장
                     st.session_state.chat_history[cur_id]["messages"] = st.session_state.messages
+                    # **수정: datetime.now()를 사용하여 실시간 시간 기록**
                     st.session_state.chat_history[cur_id]["created_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
 
                     # 제목이 기본값이면, 첫 번째 user 질문으로 자동 제목 설정

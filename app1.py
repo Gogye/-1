@@ -10,8 +10,8 @@ import ta
 import random
 from datetime import datetime
 import google.generativeai as genai
-# 수정: types 모듈 임포트 방식을 변경하여 안정성을 높입니다.
-from google.generativeai.types import GenerateContentConfig 
+# 수정: types 모듈 임포트 방식을 제거하고 config를 딕셔너리로 직접 전달하여 호환성 문제를 해결합니다.
+# from google.generativeai.types import GenerateContentConfig 
 import uuid # For generating unique chat IDs
 
 # ----------------------------------------------------------------------
@@ -949,35 +949,31 @@ with st.sidebar:
                     # 모델 설정
                     model = genai.GenerativeModel('gemini-2.5-flash')
                     
-                    # --- [수정된 부분]: history 구성을 더 간단하고 표준적인 방식으로 변경 ---
-                    # 대화 기록을 모델에 전달할 형식으로 변환 (messages는 [{'role': str, 'content': str}] 형태)
+                    # --- history 구성을 위한 데이터 변환 ---
                     history_for_api = [
                         {
-                            "role": m['role'].replace('assistant', 'model'), # Gemini API는 'model' role을 사용합니다.
+                            # Gemini API는 'model' role을 사용합니다.
+                            "role": m['role'].replace('assistant', 'model'), 
                             "parts": [{"text": m['content']}]
                         }
                         for m in st.session_state.chat_sessions[current_session_id]['messages']
                     ]
                     
-                    # 마지막 사용자 메시지를 포함하여 전체 대화 기록을 contents로 전달
-                    # (위에서 이미 st.session_state에 마지막 메시지를 추가했으므로, 그대로 사용)
-
-                    # 시스템 인스트럭션 추가 (optional, but good for financial persona)
+                    # 시스템 인스트럭션 추가
                     system_instruction_text = (
                         "당신은 금융 및 주식 시장 분석에 특화된 유능한 Gemini AI 어시스턴트입니다. "
                         "친절하고 정확하게 답변하며, 질문에 대한 구체적인 근거와 설명을 제공합니다. "
                         "한국어로 대화하며, 전문 용어는 쉽게 풀어서 설명해주고, 투자 권유가 아닌 정보 제공임을 명시합니다."
                     )
                     
-                    # GenerateContentConfig를 안정적으로 호출하도록 수정 (클래스 이름 앞에 types 모듈 경로 제거)
-                    # types 모듈에서 직접 임포트했기 때문에 클래스 이름만 사용합니다.
+                    # --- API 호출 (딕셔너리 config로 전달) ---
                     response = model.generate_content(
-                        contents=history_for_api, # 수정된 history_for_api 리스트를 전달
-                        config=GenerateContentConfig( # genai.types.GenerateContentConfig 대신 GenerateContentConfig 사용
-                            system_instruction=system_instruction_text
-                        )
+                        contents=history_for_api, 
+                        config={ 
+                            "system_instruction": system_instruction_text
+                        }
                     )
-                    # -----------------------------------------------------------------
+                    # ---------------------------------------
 
                     ai_msg = response.text
                     

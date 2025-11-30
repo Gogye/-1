@@ -862,7 +862,435 @@ def render_detail():
                 st.warning(f"데이터 부족: 최소 {window_length}일 이상 필요합니다.")
             else:
                 with st.spinner("추세 패턴 분석 중..."):
-                    df_processed = detect_market_phases
+                    df_processed = detect_market_phases(
                         df_raw, window_length, polyorder,
                         min_days1, min_days2,
+                        adjust_window, min_hits, box_window
+                    )
+                    fig = visualize_phases_altair_all_interactions(
+                        df_processed, pinpoints_df=pinpoints_df
+                    )
+                    st.altair_chart(fig, use_container_width=True)
 
+                if "Phase" in df_processed.columns:
+                    counts = df_processed['Phase'].value_counts()
+                    st.markdown("#### 추세 분포 요약")
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("상승 구간", f"{counts.get('상승', 0)}일")
+                    c2.metric("하락 구간", f"{counts.get('하락', 0)}일")
+                    c3.metric("박스권", f"{counts.get('박스권', 0)}일")
+
+                st.subheader("뉴스 이벤트 매칭")
+                st.dataframe(pinpoints_df, use_container_width=True, hide_index=True)
+
+        with tab3:
+            st.subheader("📐 기술적 지표 분석")
+            st.info("""
+            **💡 초보자를 위한 1분 요약**
+            * **볼린저 밴드:** 주가가 회색 띠를 벗어나면 다시 돌아오려는 성질이 있어요. (밴드 상단=비쌈, 하단=쌈)
+            * **MACD:** 빨간 막대가 커지면 '상승세', 파란 막대가 커지면 '하락세'입니다.
+            * **RSI:** 70을 넘으면 '과열(비쌈)', 30 밑이면 '침체(쌈)' 신호입니다.
+            """)
+            tech_chart = visualize_technical_indicators(df_raw)
+            st.altair_chart(tech_chart, use_container_width=True)
+
+            with st.expander("📚 지표 상세 해석 가이드 (눌러서 보기)"):
+                st.markdown("""
+                ### 1. 볼린저 밴드 (Bollinger Bands)
+                - **무엇인가요?** 주가가 다니는 '길'이라고 생각하세요. 
+                - **해석법:** 주가는 보통 밴드 안에서 움직입니다. 
+                    - 캔들이 **위쪽 선**을 치면? 단기 고점일 수 있습니다. (매도 고려)
+                    - 캔들이 **아래쪽 선**을 치면? 단기 저점일 수 있습니다. (매수 고려)
+                    
+                ### 2. MACD (추세)
+                - **무엇인가요?** 주가의 '방향'과 '에너지'를 보여줍니다.
+                - **해석법:**
+                    - **빨간 막대**가 점점 길어지면 상승 힘이 강해지는 것입니다.
+                    - **파란 막대**가 줄어들면서 빨간색으로 바뀌려는 순간이 '매수 타이밍'으로 불립니다.
+                    
+                ### 3. RSI (상대강도지수)
+                - **무엇인가요?** 시장의 '과열' 여부를 0~100 점수로 매긴 것입니다.
+                - **해석법:**
+                    - **70 이상 (점선 위):** "너무 뜨겁다!" 사람들이 너무 많이 사서 비싼 상태일 수 있습니다. (조심!)
+                    - **30 이하 (점선 아래):** "너무 차갑다!" 사람들이 너무 많이 팔아서 싼 상태일 수 있습니다. (기회?)
+                """)
+
+        with tab4:
+            st.subheader("📊 수익률 퍼포먼스")
+            st.caption("이 기간 동안 보유했을 때의 누적 수익률과 변동성입니다.")
+            return_chart = visualize_return_analysis(df_raw)
+            st.altair_chart(return_chart, use_container_width=True)
+
+# ----------------------------------------------------------------------
+# 10. 라우팅 (HOME / DETAIL)
+# ----------------------------------------------------------------------
+if st.session_state.page_mode == "DETAIL" and st.session_state.selected_ticker:
+    render_detail()
+else:
+    st.session_state.page_mode = "HOME"
+    render_home()
+
+# ----------------------------------------------------------------------
+# 12. AI 주식 상담 챗봇 (프로젝트 + 히스토리)
+# ----------------------------------------------------------------------
+
+# 헬퍼: 새 채팅 생성
+def _create_new_chat(project_id=None):
+    """특정 프로젝트 내에 새 채팅 세션을 생성하고 현재 세션으로 설정."""
+    if project_id is None:
+        project_id = st.session_state.current_project_id
+
+    store = st.session_state.chat_store
+    projects = store.setdefault("projects", {})
+    project = projects[project_id]
+    chats = project.setdefault("chats", {})
+
+    new_id = str(uuid.uuid4())
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    new_chat = {
+        "title": f"새 대화 ({datetime.now().strftime('%m/%d %H:%M')})",
+        "category": "기타",
+        "created_at": now_str,
+        "messages": [
+            {"role": "assistant", "content": "안녕하세요! 저는 구글 Gemini입니다. 주식에 대해 물어보세요! 🌕"}
+        ],
+    }
+    chats[new_id] = new_chat
+
+    st.session_state.current_project_id = project_id
+    st.session_state.current_chat_id = new_id
+    st.session_state.chat_title = new_chat["title"]
+    st.session_state.chat_category = new_chat["category"]
+    st.session_state.messages = new_chat["messages"]
+    st.session_state.chat_history = chats
+
+    save_chat_history(store)
+    st.rerun()
+
+# 헬퍼: 새 프로젝트 생성
+def _create_new_project():
+    """새 프로젝트를 생성하고, 그 안에 기본 대화 하나를 만든다."""
+    store = st.session_state.chat_store
+    projects = store.setdefault("projects", {})
+
+    new_pid = str(uuid.uuid4())
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
+    projects[new_pid] = {
+        "name": f"새 프로젝트 {datetime.now().strftime('%m/%d %H:%M')}",
+        "created_at": now_str,
+        "chats": {},
+    }
+    st.session_state.current_project_id = new_pid
+    save_chat_history(store)
+
+    # 새 프로젝트 안에 기본 채팅 하나 생성
+    _create_new_chat(project_id=new_pid)
+
+# 헬퍼: 대화 삭제
+def _delete_chat(chat_id_to_delete):
+    """현재 프로젝트에서 지정된 채팅을 삭제하고, 다른 채팅 또는 새 채팅을 활성화."""
+    store = st.session_state.chat_store
+    pid = st.session_state.current_project_id
+    project = store["projects"][pid]
+    chats = project.get("chats", {})
+
+    if chat_id_to_delete in chats:
+        del chats[chat_id_to_delete]
+        project["chats"] = chats
+        st.session_state.chat_history = chats
+        save_chat_history(store)
+
+        if chats:
+            # 남은 채팅 중 가장 최신으로 이동
+            sorted_history = sorted(
+                chats.items(),
+                key=lambda item: item[1].get("created_at", "1970-01-01 00:00"),
+                reverse=True
+            )
+            new_current_id = sorted_history[0][0]
+            st.session_state.current_chat_id = new_current_id
+            st.session_state.chat_title = chats[new_current_id]["title"]
+            st.session_state.chat_category = chats[new_current_id]["category"]
+            st.session_state.messages = chats[new_current_id]["messages"]
+        else:
+            # 채팅이 하나도 없으면 새 채팅 생성
+            _create_new_chat(project_id=pid)
+            return
+
+        st.rerun()
+
+# --- 사이드바 시작 ---
+with st.sidebar:
+    st.markdown("---")
+    st.header("🤖 Gemini 주식 비서")
+
+    # API 키
+    api_key = ""
+    if "GOOGLE_API_KEY" in st.secrets:
+        api_key = st.secrets["GOOGLE_API_KEY"]
+        st.success("API 키가 연동되었습니다! ✅")
+    else:
+        key_input = st.text_input("Google API Key를 입력하세요", type="password", key="sidebar_api_key_input")
+        if key_input:
+            api_key = key_input
+        if not api_key:
+            st.info("API 키를 입력하거나, Secrets에 설정하면 자동으로 연동됩니다.")
+            st.markdown("[👉 키 발급받으러 가기](https://aistudio.google.com/app/apikey)")
+
+    # -----------------------------
+    # (0) 프로젝트 관리 UI
+    # -----------------------------
+    st.markdown("### 📁 프로젝트")
+
+    projects = st.session_state.chat_store["projects"]
+    # 프로젝트가 혹시라도 비어 있으면 하나 생성
+    if not projects:
+        _create_new_project()
+
+    # 프로젝트 선택
+    project_items = list(projects.items())
+    project_labels = [proj["name"] for _, proj in project_items]
+    project_id_list = [pid for pid, _ in project_items]
+
+    # 현재 프로젝트 인덱스
+    try:
+        current_proj_index = project_id_list.index(st.session_state.current_project_id)
+    except ValueError:
+        current_proj_index = 0
+        st.session_state.current_project_id = project_id_list[0]
+
+    selected_proj_name = st.selectbox(
+        "프로젝트 선택",
+        project_labels,
+        index=current_proj_index,
+        key="project_select_box",
+    )
+    label_to_pid = {proj["name"]: pid for pid, proj in project_items}
+    selected_proj_id = label_to_pid[selected_proj_name]
+
+    if selected_proj_id != st.session_state.current_project_id:
+        st.session_state.current_project_id = selected_proj_id
+        # 프로젝트 바뀌면, 해당 프로젝트의 가장 최신 채팅으로 이동
+        chats = projects[selected_proj_id].get("chats", {})
+        if chats:
+            sorted_history = sorted(
+                chats.items(),
+                key=lambda item: item[1].get("created_at", "1970-01-01 00:00"),
+                reverse=True
+            )
+            st.session_state.current_chat_id = sorted_history[0][0]
+            st.session_state.chat_title = sorted_history[0][1].get("title", "새 대화")
+            st.session_state.chat_category = sorted_history[0][1].get("category", "기타")
+            st.session_state.messages = sorted_history[0][1].get("messages", [])
+        else:
+            # 채팅 없으면 새 채팅 생성
+            _create_new_chat(project_id=selected_proj_id)
+        st.session_state.chat_history = projects[selected_proj_id].get("chats", {})
+        st.rerun()
+
+    # 현재 프로젝트 이름 수정
+    current_project = projects[st.session_state.current_project_id]
+    new_proj_name = st.text_input(
+        "현재 프로젝트 이름",
+        value=current_project.get("name", ""),
+        key="current_project_name_input",
+    )
+    if new_proj_name != current_project.get("name", "") and new_proj_name.strip():
+        current_project["name"] = new_proj_name.strip()
+        save_chat_history(st.session_state.chat_store)
+
+    # 새 프로젝트
+    st.button("➕ 새 프로젝트 만들기", on_click=_create_new_project, use_container_width=True)
+
+    st.markdown("---")
+
+    # -----------------------------
+    # (1) 대화/카테고리 관리 UI
+    # -----------------------------
+    if not api_key:
+        st.warning("API 키가 설정되지 않아 챗봇 기능을 사용할 수 없습니다.")
+    else:
+        st.button("➕ 새 대화 시작", on_click=_create_new_chat, use_container_width=True, type="primary")
+
+        st.markdown("### 💬 저장된 대화")
+
+        # 카테고리 필터
+        filter_category = st.selectbox(
+            "카테고리 필터",
+            ["전체"] + CHAT_CATEGORIES,
+            index=0,
+            key="filter_category_select",
+            help="저장된 대화를 카테고리별로 필터링해서 볼 수 있어요.",
+        )
+
+        # 현재 프로젝트의 히스토리
+        cur_pid = st.session_state.current_project_id
+        cur_project = st.session_state.chat_store["projects"][cur_pid]
+        st.session_state.chat_history = cur_project.get("chats", {})
+        history_items = []
+        for cid, info in st.session_state.chat_history.items():
+            if filter_category == "전체" or info.get("category", "기타") == filter_category:
+                history_items.append((cid, info))
+
+        sorted_history_items = sorted(
+            history_items,
+            key=lambda item: item[1].get("created_at", "1970-01-01 00:00"),
+            reverse=True
+        )
+
+        if not sorted_history_items:
+            st.caption("필터링된 대화가 없습니다.")
+        else:
+            radio_options = []
+            for cid, info in sorted_history_items:
+                title = info.get('title', '제목 없음')
+                category = info.get('category', '기타')
+                try:
+                    time_obj = datetime.strptime(info.get("created_at", "1970-01-01 00:00"), "%Y-%m-%d %H:%M")
+                    time_str = time_obj.strftime("%m/%d %H:%M")
+                except Exception:
+                    time_str = info.get("created_at", "")
+                label = f"**[{category}]** {title} <br><small style='color: #888;'>{time_str}</small>"
+                radio_options.append((label, cid))
+
+            try:
+                current_index = [cid for lbl, cid in radio_options].index(st.session_state.current_chat_id)
+            except ValueError:
+                current_index = 0
+                st.session_state.current_chat_id = sorted_history_items[0][0]
+
+            selected_label = st.radio(
+                "대화 선택",
+                options=[lbl for lbl, cid in radio_options],
+                index=current_index,
+                key="chat_select_radio",
+                label_visibility="collapsed",
+                format_func=lambda x: x.split('<br>')[0],
+            )
+            label_to_id = {lbl: cid for lbl, cid in radio_options}
+            selected_id = label_to_id[selected_label]
+
+            if selected_id != st.session_state.current_chat_id:
+                st.session_state.current_chat_id = selected_id
+                st.session_state.chat_title = st.session_state.chat_history[selected_id]["title"]
+                st.session_state.chat_category = st.session_state.chat_history[selected_id]["category"]
+                st.session_state.messages = st.session_state.chat_history[selected_id]["messages"]
+                st.rerun()
+
+        # -----------------------------
+        # (2) 현재 대화의 제목/카테고리 수정 및 삭제
+        # -----------------------------
+        st.markdown("### ✏️ 현재 대화 정보")
+
+        st.session_state.chat_title = st.text_input(
+            "대화 제목(주제)",
+            value=st.session_state.chat_title,
+            key="current_chat_title_input",
+            help="예: 'RSI 기본 개념 질문', '테슬라 실적 관련 뉴스 요약' 등",
+        )
+        st.session_state.chat_category = st.selectbox(
+            "카테고리",
+            CHAT_CATEGORIES,
+            key="current_chat_category_select",
+            index=CHAT_CATEGORIES.index(st.session_state.chat_category)
+            if st.session_state.chat_category in CHAT_CATEGORIES
+            else CHAT_CATEGORIES.index("기타"),
+        )
+
+        cur_id = st.session_state.current_chat_id
+        if cur_id in st.session_state.chat_history:
+            st.session_state.chat_history[cur_id]["title"] = st.session_state.chat_title
+            st.session_state.chat_history[cur_id]["category"] = st.session_state.chat_category
+            # 변경사항 즉시 저장
+            save_chat_history(st.session_state.chat_store)
+
+        st.button(
+            "🗑️ 현재 대화 삭제",
+            on_click=_delete_chat,
+            args=(st.session_state.current_chat_id,),
+            use_container_width=True
+        )
+
+        st.markdown("---")
+
+        # -----------------------------
+        # (3) 실제 Gemini 채팅 영역
+        # -----------------------------
+        st.session_state.messages = st.session_state.chat_history[cur_id]["messages"]
+
+        chat_container = st.container()
+        with chat_container:
+            for msg in st.session_state.messages:
+                if msg["role"] == "user":
+                    st.chat_message("user").write(msg["content"])
+                else:
+                    st.chat_message("assistant", avatar="🤖").write(msg["content"])
+
+        if prompt := st.chat_input("질문을 입력하세요... (예: RSI가 뭐야?)"):
+            genai.configure(api_key=api_key)
+
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            st.chat_message("user").write(prompt)
+
+            try:
+                with st.spinner("Gemini가 분석 중입니다..."):
+                    # --- 여기서 system_instruction은 모델 생성 시에만 전달 ---
+                    system_instruction_text = (
+                        "당신은 금융 및 주식 시장 분석에 특화된 유능한 Gemini AI 어시스턴트입니다. "
+                        "친절하고 정확하게 답변하며, 질문에 대한 구체적인 근거와 설명을 제공합니다. "
+                        "한국어로 대화하며, 전문 용어는 쉽게 풀어서 설명해주고, "
+                        "투자 권유가 아닌 정보 제공임을 명시합니다."
+                    )
+
+                    model = genai.GenerativeModel(
+                        model_name='gemini-2.5-flash',
+                        system_instruction=system_instruction_text
+                    )
+
+                    history_for_api = [
+                        {
+                            "role": m['role'].replace('assistant', 'model'),
+                            "parts": [{"text": m['content']}]
+                        }
+                        for m in st.session_state.messages
+                    ]
+
+                    # generate_content에는 system_instruction 인자를 전달하지 않음
+                    response = model.generate_content(history_for_api)
+                    ai_msg = response.text
+
+                    st.session_state.messages.append({"role": "assistant", "content": ai_msg})
+                    st.chat_message("assistant", avatar="🤖").write(ai_msg)
+
+                    # 현재 대화 구조 업데이트
+                    st.session_state.chat_history[cur_id]["messages"] = st.session_state.messages
+                    st.session_state.chat_history[cur_id]["created_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
+
+                    # 제목 자동 변경
+                    if (
+                        st.session_state.chat_history[cur_id]["title"].startswith("새 대화")
+                        and len([m for m in st.session_state.messages if m["role"] == "user"]) == 1
+                    ):
+                        first_user_msg = [m for m in st.session_state.messages if m["role"] == "user"][0]["content"]
+                        new_title = first_user_msg[:20] + ("..." if len(first_user_msg) > 20 else "")
+                        st.session_state.chat_history[cur_id]["title"] = new_title
+                        st.session_state.chat_title = new_title
+
+                    save_chat_history(st.session_state.chat_store)
+                    st.rerun()
+
+            except Exception as e:
+                st.error(f"오류가 발생했습니다: {e}")
+                st.session_state.messages.pop()
+
+# ----------------------------------------------------------------------
+# 11. 푸터
+# ----------------------------------------------------------------------
+st.markdown(
+    """
+    <div class="app-footer">
+        본 서비스는 학습·연구용 데모이며, 실제 투자 의사결정에 사용하기 전 반드시 별도의 검증이 필요합니다.
+    </div>
+    """,
+    unsafe_allow_html=True,
+)

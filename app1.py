@@ -862,6 +862,7 @@ def render_detail():
                 st.warning(f"데이터 부족: 최소 {window_length}일 이상 필요합니다.")
             else:
                 with st.spinner("추세 패턴 분석 중..."):
-                    df_processed = detect_market_phases(
+                    df_processed = detect_market_phases
                         df_raw, window_length, polyorder,
                         min_days1, min_days2,
+

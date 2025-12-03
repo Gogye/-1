@@ -7,371 +7,212 @@ from scipy.signal import savgol_filter
 import math
 import altair as alt
 import ta
-import random
-from datetime import datetime
-import google.generativeai as genai
-import os
-import json
+import os 
 import uuid
 
-# ----------------------------------------------------------------------
-# 0. 페이지 설정 & 전역 스타일
-# ----------------------------------------------------------------------
+# --------- Naver news crawler dependencies
+import re
+import time
+import random
+import requests
+from bs4 import BeautifulSoup
+from datetime import datetime, timedelta
+from typing import Optional, Tuple, List, Dict
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
+from requests.exceptions import ReadTimeout, ConnectTimeout, Timeout, RequestException
+from urllib.parse import urlsplit, urlunsplit, urlencode
+
+from st_clickable_images import clickable_images
+
+
+
+# =========================
+# 1. 페이지 설정 & 전역 스타일
+# =========================
 st.set_page_config(
-    page_title="주가 추세 구간화 대시보드",
+    page_title="투자위키 - InvestWiki",
     page_icon="📈",
     layout="wide",
-    menu_items={
-        "Get Help": "mailto:youremail@example.com",
-        "Report a bug": "mailto:youremail@example.com",
-        "About": "주가 추세 구간화 알고리즘 데모 대시보드입니다."
-    }
+    initial_sidebar_state="expanded"
 )
 
 st.markdown(
     """
     <style>
-    body {
-        background-color: #f5f5f8;
-    }
-    .block-container {
-        padding-top: 3rem;
-        padding-bottom: 3rem;
-        max-width: 1200px;
-    }
-
-    .app-header {
-        padding: 0.6rem 0 1.0rem 0;
-        border-bottom: 1px solid #e5e5ef;
-        margin-bottom: 0.8rem;
-    }
-
-    .app-title {
-        font-size: 1.4rem;
-        font-weight: 700;
-        margin-bottom: 0.1rem;
-        line-height: 1.3;
-    }
-
-    .app-subtitle {
-        font-size: 0.85rem;
-        color: #777;
-        margin: 0.3rem 0 0 0;
-        line-height: 1.4;
-    }
-
-    .app-footer {
-        margin-top: 2.5rem;
-        padding-top: 1rem;
-        border-top: 1px solid #e5e5ef;
-        font-size: 0.8rem;
-        color: #999;
+    /* ==========================================================================
+       1. 전체 페이지 레이아웃 & 테마
+       ========================================================================== */
+    body { background-color: #f8f9fa; }
+    
+    .main-logo-text {
+        font-size: 3.5rem;
+        font-weight: 800;
         text-align: center;
+        background: -webkit-linear-gradient(45deg, #004aad, #cb6ce6);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 2rem;
+        margin-top: 2rem;
     }
-    /* st.radio의 라벨 영역 스타일 조정 */
-    div[data-testid="stSidebar"] div[role="radiogroup"] > label {
-        padding: 0.5rem;
-        border-radius: 0.5rem;
-        transition: background-color 0.2s;
-        border: 1px solid transparent;
-        margin-bottom: 0.2rem;
+    
+    /* ==========================================================================
+       2. 사이드바 스타일 (다크 테마)
+       ========================================================================== */
+    [data-testid="stSidebar"] {
+        background-color: #2B2D3E;
     }
-    div[data-testid="stSidebar"] div[role="radiogroup"] > label:hover {
-        background-color: #f0f0f0;
+    [data-testid="stSidebar"] * {
+        color: #FFFFFF !important;
     }
-    div[data-testid="stSidebar"] div[role="radiogroup"] > label:has(input:checked) {
-        background-color: #e6f7ff !important;
-        border: 1px solid #91d5ff;
+    [data-testid="stSidebar"] input {
+        color: #000000 !important;
     }
-    /* st.radio 항목 사이의 간격 줄이기 */
-    div[data-testid="stSidebar"] div[role="radiogroup"] {
-        gap: 0px !important;
+
+    /* ==========================================================================
+       사이드바 버튼 스타일 (강력한 강제 적용 버전)
+       ========================================================================== */
+    
+    /* 1. [선택 안 된 버튼] (Secondary) 스타일 */
+    /* 버튼 컨테이너, 내부 div, 텍스트 모두 타겟팅 */
+    section[data-testid="stSidebar"] button[kind="secondary"],
+    section[data-testid="stSidebar"] button[kind="secondary"] > div,
+    section[data-testid="stSidebar"] button[kind="secondary"] p {
+        background-color: #FFFFFF !important; /* 배경: 흰색 */
+        color: #000000 !important;            /* 글자: 검정색 */
+        border-color: #E0E0E0 !important;     /* 테두리: 연회색 */
     }
-    /* New Chat Button */
-    div[data-testid="stSidebar"] .stButton > button {
-        height: 3em;
+    
+    /* Secondary 버튼 자체에만 border 적용 (중복 방지) */
+    section[data-testid="stSidebar"] button[kind="secondary"] {
+        border: 1px solid #E0E0E0 !important;
+    }
+
+    /* 마우스 올렸을 때 (Hover) */
+    section[data-testid="stSidebar"] button[kind="secondary"]:hover,
+    section[data-testid="stSidebar"] button[kind="secondary"]:hover > div,
+    section[data-testid="stSidebar"] button[kind="secondary"]:hover p {
+        background-color: #F5F5F5 !important;
+        color: #000000 !important;
+        border-color: #BDBDBD !important;
+    }
+
+    /* -------------------------------------------------------------------------- */
+
+    /* 2. [선택된 버튼] (Primary) 스타일 */
+    section[data-testid="stSidebar"] button[kind="primary"],
+    section[data-testid="stSidebar"] button[kind="primary"] > div,
+    section[data-testid="stSidebar"] button[kind="primary"] p {
+        background-color: #2E86C1 !important; /* 배경: 파란색 */
+        color: #FFFFFF !important;            /* 글자: 흰색 */
+        border: none !important;
+    }
+
+    /* 마우스 올렸을 때 (Hover) */
+    section[data-testid="stSidebar"] button[kind="primary"]:hover,
+    section[data-testid="stSidebar"] button[kind="primary"]:hover > div,
+    section[data-testid="stSidebar"] button[kind="primary"]:hover p {
+        background-color: #1B4F72 !important; /* 더 진한 파란색 */
+        color: #FFFFFF !important;
+    }
+    
+    /* 버튼 공통 크기 설정 */
+    section[data-testid="stSidebar"] button {
+        width: 100%;
+        border-radius: 8px !important;
+        height: auto !important;
+        padding-top: 0.5rem !important;
+        padding-bottom: 0.5rem !important;
     }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ----------------------------------------------------------------------
-# 전역 상수: 대화 저장 파일 및 카테고리
-# ----------------------------------------------------------------------
-CHAT_HISTORY_FILE = "gemini_chat_history.json"
-CHAT_CATEGORIES = [
-    "기초 개념",
-    "기술적 지표",
-    "종목 분석",
-    "시장 뉴스/이벤트",
-    "투자 전략",
-    "기타",
-]
-
-# ----------------------------------------------------------------------
-# Gemini 대화/프로젝트 저장 구조 로딩/저장
-#   - 파일 구조:
-#   {
-#     "projects": {
-#       "<project_id>": {
-#         "name": "...",
-#         "created_at": "...",
-#         "chats": {
-#           "<chat_id>": {...}
-#         }
-#       }
-#     }
-#   }
-# ----------------------------------------------------------------------
-def load_chat_history():
-    """
-    저장된 전체 프로젝트/대화 구조를 불러온다.
-    과거 버전(단일 chat dict)도 자동으로 기본 프로젝트로 마이그레이션한다.
-    """
-    if not os.path.exists(CHAT_HISTORY_FILE):
-        return {"projects": {}}
-
+# =========================
+# 2. 헬퍼 함수 (이미지 로드, 데이터 로드)
+# =========================
+@st.cache_data
+def get_image_base64_from_url(url):
     try:
-        with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except Exception:
-        return {"projects": {}}
-
-    # 이미 새 구조면 그대로 반환
-    if isinstance(data, dict) and "projects" in data:
-        return data
-
-    # 과거 구조: {chat_id: {...}} 형태 → 기본 프로젝트로 래핑
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    default_project_id = str(uuid.uuid4())
-    return {
-        "projects": {
-            default_project_id: {
-                "name": "기본 프로젝트",
-                "created_at": now_str,
-                "chats": data if isinstance(data, dict) else {},
-            }
-        }
-    }
-
-def save_chat_history(store: dict):
-    """전체 프로젝트/대화 구조를 파일로 저장한다."""
-    try:
-        with open(CHAT_HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(store, f, ensure_ascii=False, indent=2)
-    except Exception:
+        response = requests.get(url)
+        if response.status_code == 200:
+            encoded_string = base64.b64encode(response.content).decode()
+            return f"data:image/png;base64,{encoded_string}"
+    except:
         pass
+    return None
 
-# ----------------------------------------------------------------------
-# 1. 핀포인트(이벤트) 데이터 (임시)
-# ----------------------------------------------------------------------
 pinpoints_df = pd.DataFrame({
-    'Date': ['2024-06-05', '2024-10-10'],
-    'Event': ['Vision Pro 발표', '신제품 출시'],
-    'Content': ['Apple이 Vision Pro를 발표했습니다.', 'Apple이 새로운 제품을 출시했습니다.'],
-    'Link': ['https://www.apple.com/newsroom/2024/06/apple-unveils-vision-pro-revolutionary-spatial-computing-platform/',
-             'https://www.apple.com/newsroom/2024/10/apple-announces-new-products/']
+    "Date": ["2024-06-05", "2024-10-10"],
+    "Event": ["Vision Pro 발표", "신제품 출시"],
+    "Content": ["Apple이 Vision Pro를 발표했습니다.", "Apple이 새로운 제품을 출시했습니다."],
+    "Link": [
+        "https://www.apple.com/newsroom/2024/06/apple-unveils-vision-pro-revolutionary-spatial-computing-platform/",
+        "https://www.apple.com/newsroom/2024/10/apple-announces-new-products/",
+    ],
 })
 
-# ----------------------------------------------------------------------
-# 2. 인기 종목 풀 리스트 (총 20개)
-# ----------------------------------------------------------------------
-POPULAR_STOCKS_ALL = [
-    # 기존 3개
-    {"code": "005930", "name": "삼성전자"},
-    {"code": "068270", "name": "셀트리온"},
-    {"code": "011200", "name": "HMM"},
-
-    # 미국 나스닥 상위 (예시)
-    {"code": "NVDA", "name": "NVIDIA"},
-    {"code": "AAPL", "name": "애플"},
-    {"code": "MSFT", "name": "마이크로소프트"},
-    {"code": "AMZN", "name": "아마존"},
-    {"code": "GOOGL", "name": "알파벳 A"},
-    {"code": "GOOG", "name": "알파벳 C"},
-    {"code": "AVGO", "name": "브로드컴"},
-    {"code": "META", "name": "메타 플랫폼스"},
-    {"code": "TSLA", "name": "테슬라"},
-    {"code": "NFLX", "name": "넷플릭스"},
-
-    # 국내 시총 상위 (삼성전자 제외)
-    {"code": "000660", "name": "SK하이닉스"},
-    {"code": "373220", "name": "LG에너지솔루션"},
-    {"code": "207940", "name": "삼성바이오로직스"},
-    {"code": "005380", "name": "현대자동차"},
-    {"code": "329180", "name": "HD현대중공업"},
-    {"code": "034020", "name": "두산에너빌리티"},
-    {"code": "012450", "name": "한화에어로스페이스"},
+# 인기 종목 리스트 (전역 변수)
+ALL_POPULAR_STOCKS = [
+    ("삼성전자", "005930"), ("셀트리온", "068270"), ("HMM", "011200"),
+    ("애플", "AAPL"), ("마이크로소프트", "MSFT"), ("알파벳 A", "GOOGL"),
+    ("알파벳 C", "GOOG"), ("아마존", "AMZN"), ("엔비디아", "NVDA"),
+    ("메타", "META"), ("TSMC", "TSM"), ("테슬라", "TSLA"),
+    ("현대차", "005380"), ("LG에너지솔루션", "373220"), ("SK하이닉스", "000660"),
+    ("기아", "000270"), ("POSCO홀딩스", "005490"), ("KB금융", "105560"),
+    ("신한지주", "055550"), ("카카오", "035720"), ("NAVER", "035420")
 ]
 
-# ----------------------------------------------------------------------
-# 3. 세션 상태 초기화 (페이지, 종목, 프로젝트/대화 구조)
-# ----------------------------------------------------------------------
-if "page_mode" not in st.session_state:
-    st.session_state.page_mode = "HOME"  # HOME 또는 DETAIL
+if "popular_indices" not in st.session_state:
+    st.session_state.popular_indices = list(range(len(ALL_POPULAR_STOCKS)))
 
-if "selected_ticker" not in st.session_state:
-    st.session_state.selected_ticker = ""
-
-if "popular_sample" not in st.session_state:
-    st.session_state.popular_sample = random.sample(POPULAR_STOCKS_ALL, 5)
-
-if "popular_refresh_time" not in st.session_state:
-    st.session_state.popular_refresh_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-# ---- 프로젝트/대화 전체 구조 로드 ----
-if "chat_store" not in st.session_state:
-    st.session_state.chat_store = load_chat_history()
-
-# projects 키 보장
-if "projects" not in st.session_state.chat_store:
-    st.session_state.chat_store["projects"] = {}
-
-projects = st.session_state.chat_store["projects"]
-
-# 프로젝트가 하나도 없으면 기본 프로젝트 + 기본 대화 생성
-if not projects:
-    default_project_id = str(uuid.uuid4())
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    default_chat_id = str(uuid.uuid4())
-    default_chat = {
-        "title": "새 대화",
-        "category": "기타",
-        "created_at": now_str,
-        "messages": [
-            {"role": "assistant", "content": "안녕하세요! 저는 구글 Gemini입니다. 주식에 대해 물어보세요! 🌕"}
-        ],
-    }
-    st.session_state.chat_store["projects"][default_project_id] = {
-        "name": "기본 프로젝트",
-        "created_at": now_str,
-        "chats": {default_chat_id: default_chat},
-    }
-    st.session_state.current_project_id = default_project_id
-    st.session_state.current_chat_id = default_chat_id
-    st.session_state.chat_title = default_chat["title"]
-    st.session_state.chat_category = default_chat["category"]
-    st.session_state.messages = default_chat["messages"]
-    save_chat_history(st.session_state.chat_store)
-else:
-    # 현재 프로젝트 ID 설정
-    if "current_project_id" not in st.session_state or \
-       st.session_state.current_project_id not in st.session_state.chat_store["projects"]:
-        sorted_projects = sorted(
-            projects.items(),
-            key=lambda item: item[1].get("created_at", "1970-01-01 00:00"),
-            reverse=True,
-        )
-        st.session_state.current_project_id = sorted_projects[0][0]
-
-    cur_proj = st.session_state.chat_store["projects"][st.session_state.current_project_id]
-    chats = cur_proj.get("chats", {})
-
-    # 현재 프로젝트에 대화가 없으면 기본 대화 하나 생성
-    if not chats:
-        default_chat_id = str(uuid.uuid4())
-        now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-        default_chat = {
-            "title": "새 대화",
-            "category": "기타",
-            "created_at": now_str,
-            "messages": [
-                {"role": "assistant", "content": "안녕하세요! 저는 구글 Gemini입니다. 주식에 대해 물어보세요! 🌕"}
-            ],
-        }
-        cur_proj["chats"] = {default_chat_id: default_chat}
-        st.session_state.current_chat_id = default_chat_id
-        st.session_state.chat_title = default_chat["title"]
-        st.session_state.chat_category = default_chat["category"]
-        st.session_state.messages = default_chat["messages"]
-        save_chat_history(st.session_state.chat_store)
-    else:
-        # 현재 채팅 ID 설정
-        if "current_chat_id" not in st.session_state or \
-           st.session_state.current_chat_id not in chats:
-            sorted_history = sorted(
-                chats.items(),
-                key=lambda item: item[1].get("created_at", "1970-01-01 00:00"),
-                reverse=True,
-            )
-            st.session_state.current_chat_id = sorted_history[0][0]
-
-        cur_chat = chats[st.session_state.current_chat_id]
-        st.session_state.chat_title = cur_chat.get("title", "새 대화")
-        st.session_state.chat_category = cur_chat.get("category", "기타")
-        st.session_state.messages = cur_chat.get("messages", [])
-
-# 편의를 위해 "현재 프로젝트의 채팅 dict"를 별도로 들고 있음 (참조 연결됨)
-st.session_state.chat_history = st.session_state.chat_store["projects"][st.session_state.current_project_id]["chats"]
-
-# ----------------------------------------------------------------------
-# 4. 데이터 로딩 함수 (캐싱 적용)
-# ----------------------------------------------------------------------
 @st.cache_data
 def load_data(ticker, start_date, end_date):
     try:
         df = fdr.DataReader(ticker, start_date, end_date)
         df = df.dropna()
-        if df.empty:
-            st.error("해당 기간에 데이터가 없습니다.")
-            return None
+        if df.empty: return None
         return df.copy()
-    except Exception as e:
-        st.error(f"데이터 로딩 중 오류 발생: {e}")
-        return None
+    except: return None
 
-# ----------------------------------------------------------------------
-# 5. 알고리즘 함수들 (기존 코드 유지)
-# ----------------------------------------------------------------------
+# =========================
+# 3. 알고리즘 함수들
+# =========================
 def apply_smoothing_and_phase(df, window_length, polyorder):
     df = df.copy()
     if len(df) < window_length:
-        st.warning("데이터가 스무딩 윈도우보다 적어 스무딩을 적용할 수 없습니다.")
         df["Smooth"] = df["Close"]
     else:
         df["Smooth"] = savgol_filter(df["Close"], window_length=window_length, polyorder=polyorder)
     df["Slope"] = np.gradient(df["Smooth"])
-    classify = lambda s: "상승" if s > 0 else "하락"
-    df["Phase"] = df["Slope"].apply(classify)
+    df["Phase"] = df["Slope"].apply(lambda s: "상승" if s > 0 else "하락")
     return df
 
 def apply_box_range(df, min_hits, window):
     df = df.copy()
-    if df.empty:
-        return df
-
-    p_min, p_max = df['Close'].min(), df['Close'].max()
+    if df.empty: return df
+    p_min, p_max = df["Close"].min(), df["Close"].max()
     limit = (p_max - p_min) / 25
-
-    diffs = df['Close'].diff().abs()
+    diffs = df["Close"].diff().abs()
     min_step = diffs[diffs > 0].min()
-
-    if pd.isna(min_step):
-        min_step = 10
-
+    if pd.isna(min_step): min_step = 10
     exponent = int(math.floor(math.log10(min_step)))
     step = 10 ** exponent if exponent >= 1 else 10
 
     for k in np.arange(p_min, p_max, step):
         crossings = [False] * len(df)
         for i in range(1, len(df)):
-            y0, y1 = df['Close'].iloc[i-1], df['Close'].iloc[i]
+            y0, y1 = df["Close"].iloc[i-1], df["Close"].iloc[i]
             if (y0 - k) * (y1 - k) <= 0:
-                crossings[i-1] = True
-                crossings[i] = True
-
-        if len(crossings) <= window:
-            continue
-
+                crossings[i-1] = True; crossings[i] = True
+        if len(crossings) <= window: continue
         for i in range(1, len(crossings) - window):
             if sum(crossings[i:i+window]) >= min_hits:
                 if abs(df["Close"].iloc[i+window] - df["Close"].iloc[i]) <= limit:
                     df.loc[df.index[i:i+min_hits], "Phase"] = "박스권"
-
-    if len(df) <= window:
-        return df
-
+    
+    if len(df) <= window: return df
     for i in range(len(df) - window):
         window_prices = df["Close"].iloc[i:i+window]
         window_mean = window_prices.mean()
@@ -379,918 +220,606 @@ def apply_box_range(df, min_hits, window):
         lower = window_mean - limit
         if window_prices.max() <= upper and window_prices.min() >= lower:
             df.loc[df.index[i:i+window], "Phase"] = "박스권"
-
     return df
 
 def merge_short_phases(df, min_days):
     df = df.copy()
-    if "Phase" not in df.columns or df.empty:
-        return df
-
+    if "Phase" not in df.columns or df.empty: return df
     df["group_id"] = (df["Phase"] != df["Phase"].shift()).cumsum()
     df["group_size"] = df.groupby("group_id")["Phase"].transform("size")
-
-    unique_group_ids = df["group_id"].unique()
-    if len(unique_group_ids) < 2:
-        return df
-
-    min_group_id = df["group_id"].min()
-    max_group_id = df["group_id"].max()
-
-    for group_id in unique_group_ids:
-        mask = df["group_id"] == group_id
+    unique_ids = df["group_id"].unique()
+    if len(unique_ids) < 2: return df
+    min_gid = df["group_id"].min(); max_gid = df["group_id"].max()
+    for gid in unique_ids:
+        mask = df["group_id"] == gid
         size = df.loc[mask, "group_size"].iloc[0]
-
-        if size <= min_days and group_id > min_group_id:
-            if group_id == max_group_id:
-                continue
-
-            g_min, g_max = df.loc[mask, 'Close'].min(), df.loc[mask, 'Close'].max()
-            if g_max - g_min >= (df['Close'].max() - df['Close'].min()) / 5:
-                continue
-
-            prev_group_mask = df["group_id"] == group_id - 1
-            if not prev_group_mask.empty:
-                prev_phase = df.loc[prev_group_mask, "Phase"].iloc[0]
-            else:
-                prev_phase = None
-            
-            next_group_mask = df["group_id"] == group_id + 1
-            if not next_group_mask.empty:
-                next_phase = df.loc[next_group_mask, "Phase"].iloc[0]
-            else:
-                next_phase = None
-
-            if prev_phase and prev_phase != '박스권':
-                df.loc[mask, "Phase"] = prev_phase
-            elif next_phase and next_phase != '박스권':
-                df.loc[mask, "Phase"] = next_phase
+        if size <= min_days and gid > min_gid:
+            if gid == max_gid: continue
+            g_min, g_max = df.loc[mask, "Close"].min(), df.loc[mask, "Close"].max()
+            if g_max - g_min >= (df["Close"].max() - df["Close"].min()) / 5: continue
+            prev_phase = df.loc[df["group_id"] == gid - 1, "Phase"].iloc[0]
+            next_phase = df.loc[df["group_id"] == gid + 1, "Phase"].iloc[0]
+            if prev_phase != "박스권": df.loc[mask, "Phase"] = prev_phase
+            elif next_phase != "박스권": df.loc[mask, "Phase"] = next_phase
     return df
 
 def adjust_change_points(df, adjust_window):
     df = df.copy()
-    if "Phase" not in df.columns or df.empty or len(df) < adjust_window:
-        return df
-
+    if "Phase" not in df.columns or df.empty or len(df) < adjust_window: return df
     df["group_id"] = (df["Phase"] != df["Phase"].shift()).cumsum()
     change_points = df.index[df["Phase"] != df["Phase"].shift()]
-
-    if len(change_points) < 2:
-        return df
-
+    if len(change_points) < 2: return df
     for cp in change_points:
         cp_idx = df.index.get_loc(cp)
-        if cp_idx == 0:
-            continue
-
+        if cp_idx == 0: continue
         current_phase = df.loc[cp, "Phase"]
         prev_phase = df.loc[df.index[cp_idx - 1], "Phase"]
-
         start_win = max(0, cp_idx - adjust_window)
         end_win = min(len(df), cp_idx + adjust_window + 1)
         window_data = df.iloc[start_win:end_win]
-
-        if window_data.empty:
-            continue
-
+        if window_data.empty: continue
         if current_phase == "상승":
             local_min_idx = window_data["Close"].idxmin()
             local_min_pos = df.index.get_loc(local_min_idx)
-
-            if local_min_pos > cp_idx:
-                df.loc[df.index[cp_idx:local_min_pos], "Phase"] = prev_phase
-            elif local_min_pos < cp_idx:
-                df.loc[df.index[local_min_pos:cp_idx], "Phase"] = "상승"
-
+            if local_min_pos > cp_idx: df.loc[df.index[cp_idx:local_min_pos], "Phase"] = prev_phase
+            elif local_min_pos < cp_idx: df.loc[df.index[local_min_pos:cp_idx], "Phase"] = "상승"
         elif current_phase == "하락":
             local_max_idx = window_data["Close"].idxmax()
             local_max_pos = df.index.get_loc(local_max_idx)
-
-            if local_max_pos > cp_idx:
-                df.loc[df.index[cp_idx:local_max_pos], "Phase"] = prev_phase
-            elif local_max_pos < cp_idx:
-                df.loc[df.index[local_max_pos:cp_idx], "Phase"] = "하락"
+            if local_max_pos > cp_idx: df.loc[df.index[cp_idx:local_max_pos], "Phase"] = prev_phase
+            elif local_max_pos < cp_idx: df.loc[df.index[local_max_pos:cp_idx], "Phase"] = "하락"
     return df
 
 def detect_market_phases(df, window_length, polyorder, min_days1, min_days2, adjust_window, min_hits, box_window):
-    df_result = df.copy()
-    df_result = apply_smoothing_and_phase(df_result, window_length, polyorder)
-    df_result = apply_box_range(df_result, min_hits, box_window)
-    df_result = merge_short_phases(df_result, min_days1)
-    df_result = adjust_change_points(df_result, adjust_window)
-    df_result = merge_short_phases(df_result, min_days2)
-    return df_result
+    df_res = df.copy()
+    df_res = apply_smoothing_and_phase(df_res, window_length, polyorder)
+    df_res = apply_box_range(df_res, min_hits, box_window)
+    df_res = merge_short_phases(df_res, min_days1)
+    df_res = adjust_change_points(df_res, adjust_window)
+    df_res = merge_short_phases(df_res, min_days2)
+    return df_res
 
-# ----------------------------------------------------------------------
-# 6. 시각화 / 지표 함수들 (기존 코드 유지)
-# ----------------------------------------------------------------------
+# =========================
+# 4. 시각화 함수들
+# =========================
+@st.cache_data
+def get_stock_name(ticker):
+    """
+    티커(종목코드)를 입력받아 종목명(한글/영어)을 반환하는 함수
+    1. 인기 종목 리스트에서 먼저 검색
+    2. 없으면 KRX 전체 리스트에서 검색
+    3. 그래도 없으면 티커 그대로 반환
+    """
+    ticker = ticker.upper().strip() # 대문자 변환 및 공백 제거
+
+    ALL_POPULAR_STOCKS = [("삼성전자", "005930"), ("HMM", "011200"), ('셀트리온',"068270")]
+    for name, code in ALL_POPULAR_STOCKS:
+        if code == ticker:
+            return name
+    
+    # 2. KRX(한국시장) 전체 리스트에서 찾기 (캐싱됨)
+    try:
+        df_krx = fdr.StockListing('KRX')
+        # Code가 일치하는 행 찾기
+        row = df_krx[df_krx['Code'] == ticker]
+        if not row.empty:
+            return row.iloc[0]['Name']
+    except:
+        pass
+
+    # 3. 미국 주식 등 못 찾은 경우 그냥 티커 반환
+    return ticker
+
 def display_metrics(df):
-    if len(df) < 2:
-        return
-    latest = df.iloc[-1]
-    prev = df.iloc[-2]
-
-    close_price = latest['Close']
-    price_diff = close_price - prev['Close']
-    pct_change = (price_diff / prev['Close']) * 100
-    volume = latest['Volume']
-    rsi = ta.momentum.RSIIndicator(df['Close'], window=14).rsi().iloc[-1]
-    high_52w = df['Close'][-250:].max() if len(df) > 250 else df['Close'].max()
-
-    m1, m2, m3, m4 = st.columns(4)
-    with m1:
-        st.metric("현재 주가", f"{close_price:,.0f} 원", f"{price_diff:,.0f} 원 ({pct_change:+.2f}%)")
-    with m2:
-        st.metric("거래량", f"{volume:,.0f} 주")
-    with m3:
-        st.metric("RSI (14일)", f"{rsi:.2f}")
-    with m4:
-        st.metric("52주 최고가", f"{high_52w:,.0f} 원")
-    st.divider()
+    if len(df) < 2: return
+    latest = df.iloc[-1]; prev = df.iloc[-2]
+    diff = latest["Close"] - prev["Close"]
+    pct = (diff / prev["Close"]) * 100
+    
+    st.markdown(f"""
+    <div style="padding:15px; background:white; border-radius:10px; border:1px solid #ddd; display:flex; gap:20px; align-items:center; margin-bottom:20px;">
+        <div>
+            <span style="color:#666; font-size:0.9rem;">현재 주가</span><br>
+            <span style="font-size:1.8rem; font-weight:bold;">{latest['Close']:,.0f}원</span>
+        </div>
+        <div style="color:{'red' if diff > 0 else 'blue'};">
+            <span style="font-size:1.2rem; font-weight:bold;">{diff:,.0f}원 ({pct:+.2f}%)</span>
+        </div>
+        <div style="margin-left:auto; text-align:right;">
+             <span style="color:#666; font-size:0.8rem;">거래량</span> <span style="font-weight:bold;">{latest['Volume']:,.0f}</span><br>
+             <span style="color:#666; font-size:0.8rem;">RSI(14)</span> <span style="font-weight:bold;">{ta.momentum.RSIIndicator(df["Close"]).rsi().iloc[-1]:.1f}</span>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
 
 def visualize_candlestick(df):
-    df_reset = df.reset_index().rename(columns={'index': 'Date'})
-    df_reset['Date_start'] = df_reset['Date'] - pd.Timedelta(hours=9)
-    df_reset['Date_end'] = df_reset['Date'] + pd.Timedelta(hours=9)
-
-    rule = alt.Chart(df_reset).mark_rule().encode(
-        x=alt.X('Date:T', axis=alt.Axis(format='%Y-%m-%d', title='날짜')),
-        y=alt.Y('Low:Q', scale=alt.Scale(zero=False), title='주가'),
-        y2='High:Q',
+    df_r = df.reset_index().rename(columns={"index":"Date"})
+    base = alt.Chart(df_r).encode(x=alt.X("Date:T", axis=alt.Axis(format="%Y-%m-%d")))
+    rule = base.mark_rule().encode(
+        y=alt.Y("Low:Q", scale=alt.Scale(zero=False)), y2="High:Q",
         color=alt.condition("datum.Open <= datum.Close", alt.value("#ff0000"), alt.value("#0000ff"))
     )
-
-    body = alt.Chart(df_reset).mark_rect().encode(
-        x='Date_start:T',
-        x2='Date_end:T',
-        y='Open:Q',
-        y2='Close:Q',
+    bar = base.mark_bar().encode(
+        y="Open:Q", y2="Close:Q",
         color=alt.condition("datum.Open <= datum.Close", alt.value("#ff0000"), alt.value("#0000ff")),
-        tooltip=['Date:T', 'Open', 'High', 'Low', 'Close', 'Volume']
+        tooltip=["Date:T", "Open", "Close", "High", "Low"]
     )
-
-    chart = (rule + body).properties(
-        height=300,
-        title="일봉 캔들 차트"
-    ).interactive()
-    return chart
+    return (rule + bar).properties(height=350).interactive()
 
 def visualize_technical_indicators(df):
     df = df.copy()
-    if len(df) < 30:
-        return alt.Chart(pd.DataFrame({'text': ['데이터가 부족하여 지표를 계산할 수 없습니다. (최소 30일 이상 필요)']})).mark_text(size=20).encode(text='text')
-
-    indicator_bb = ta.volatility.BollingerBands(close=df["Close"], window=20, window_dev=2)
-    df['bb_h'] = indicator_bb.bollinger_hband()
-    df['bb_l'] = indicator_bb.bollinger_lband()
-
-    indicator_macd = ta.trend.MACD(close=df["Close"], window_slow=26, window_fast=12, window_sign=9)
-    df['macd'] = indicator_macd.macd()
-    df['macd_signal'] = indicator_macd.macd_signal()
-    df['macd_diff'] = indicator_macd.macd_diff()
-
-    indicator_rsi = ta.momentum.RSIIndicator(close=df["Close"], window=14)
-    df['rsi'] = indicator_rsi.rsi()
-
-    df_reset = df.dropna().reset_index().rename(columns={'index': 'Date'})
-    if df_reset.empty:
-        return alt.Chart(pd.DataFrame({'text': ['유효한 데이터가 없습니다.']})).mark_text().encode(text='text')
-
-    base = alt.Chart(df_reset).encode(x=alt.X('Date:T', axis=alt.Axis(title=None, format='%Y-%m-%d')))
-
-    bb_line = base.mark_line(color='black', strokeWidth=1).encode(
-        y=alt.Y('Close:Q', scale=alt.Scale(zero=False), title='주가')
-    )
-    bb_band = base.mark_area(opacity=0.2, color='gray').encode(
-        y='bb_l:Q',
-        y2='bb_h:Q'
-    )
-    chart_bb = (bb_line + bb_band).properties(height=250, title="볼린저 밴드 (가격 변동폭)")
-
-    macd_line = base.mark_line(color='grey').encode(y='macd:Q')
-    sig_line = base.mark_line(color='orange').encode(y='macd_signal:Q')
-    hist_bar = base.mark_bar().encode(
-        y=alt.Y('macd_diff:Q', title='MACD Diff'),
-        color=alt.condition(alt.datum.macd_diff > 0, alt.value("#ff9999"), alt.value("#aaccff"))
-    )
-    chart_macd = (hist_bar + macd_line + sig_line).properties(height=150, title="MACD (추세 강도)")
-
-    rsi_line = base.mark_line(color='purple').encode(
-        y=alt.Y('rsi:Q', scale=alt.Scale(domain=[0, 100]), title='RSI')
-    )
-    rsi_rule_high = alt.Chart(pd.DataFrame({'y': [70]})).mark_rule(
-        color='red', strokeDash=[3, 3]
-    ).encode(y='y')
-    rsi_rule_low = alt.Chart(pd.DataFrame({'y': [30]})).mark_rule(
-        color='blue', strokeDash=[3, 3]
-    ).encode(y='y')
-    chart_rsi = (rsi_line + rsi_rule_high + rsi_rule_low).properties(height=150, title="RSI (과열/침체)")
-
-    return alt.vconcat(chart_bb, chart_macd, chart_rsi).resolve_scale(x='shared').interactive()
+    if len(df) < 30: return alt.Chart(pd.DataFrame()).mark_text(text="데이터 부족")
+    
+    bb = ta.volatility.BollingerBands(close=df["Close"], window=20, window_dev=2)
+    df["bb_h"] = bb.bollinger_hband(); df["bb_l"] = bb.bollinger_lband()
+    rsi = ta.momentum.RSIIndicator(close=df["Close"]).rsi()
+    df["rsi"] = rsi
+    
+    df_r = df.reset_index().rename(columns={"index":"Date"})
+    base = alt.Chart(df_r).encode(x="Date:T")
+    
+    bb_c = (base.mark_line(color="black").encode(y=alt.Y("Close:Q", scale=alt.Scale(zero=False))) + 
+            base.mark_area(opacity=0.2).encode(y="bb_l:Q", y2="bb_h:Q")).properties(height=200, title="볼린저 밴드")
+    
+    rsi_c = (base.mark_line(color="purple").encode(y=alt.Y("rsi:Q", scale=alt.Scale(domain=[0,100]))) +
+             alt.Chart(pd.DataFrame({'y':[70]})).mark_rule(color='red').encode(y='y') +
+             alt.Chart(pd.DataFrame({'y':[30]})).mark_rule(color='blue').encode(y='y')).properties(height=150, title="RSI")
+             
+    return alt.vconcat(bb_c, rsi_c).resolve_scale(x='shared').interactive()
 
 def visualize_return_analysis(df):
     df = df.copy()
-    df['Daily_Ret'] = df['Close'].pct_change()
-    df['Cum_Ret'] = (1 + df['Daily_Ret']).cumprod() - 1
-    df_reset = df.dropna().reset_index().rename(columns={'index': 'Date'})
-
-    cum_chart = alt.Chart(df_reset).mark_area(
-        line={'color': 'darkgreen'},
-        color=alt.Gradient(
-            gradient='linear',
-            stops=[
-                alt.GradientStop(color='white', offset=0),
-                alt.GradientStop(color='darkgreen', offset=1)
-            ],
-            x1=1, x2=1, y1=1, y2=0
-        )
+    df["Cum_Ret"] = (1 + df["Close"].pct_change()).cumprod() - 1
+    df_r = df.dropna().reset_index().rename(columns={"index":"Date"})
+    return alt.Chart(df_r).mark_area(
+        line={'color':'green'},
+        color=alt.Gradient(gradient='linear', stops=[alt.GradientStop(color='white', offset=0), alt.GradientStop(color='green', offset=1)], x1=1, x2=1, y1=1, y2=0)
     ).encode(
-        x=alt.X('Date:T', title='날짜'),
-        y=alt.Y('Cum_Ret:Q', title='누적 수익률', axis=alt.Axis(format='%')),
-        tooltip=[
-            alt.Tooltip('Date:T', format='%Y-%m-%d'),
-            alt.Tooltip('Cum_Ret:Q', format='.2%')
-        ]
-    ).properties(height=300, title="누적 수익률 추이 (Cumulative Return)").interactive()
+        x="Date:T", y=alt.Y("Cum_Ret:Q", axis=alt.Axis(format="%"), title="누적 수익률"),
+        tooltip=["Date:T", alt.Tooltip("Cum_Ret:Q", format=".2%")]
+    ).properties(height=300).interactive()
 
-    hist_chart = alt.Chart(df_reset).mark_bar().encode(
-        x=alt.X('Daily_Ret:Q', bin=alt.Bin(maxbins=50), title='일별 등락률'),
-        y=alt.Y('count()', title='빈도수'),
-        color=alt.value('purple')
-    ).properties(height=200, title="일별 등락률 분포 (Histogram)")
-
-    return alt.vconcat(cum_chart, hist_chart)
-
-def visualize_phases_altair_all_interactions(df, pinpoints_df=None):
-    if df.empty:
-        return alt.Chart(pd.DataFrame()).mark_text().properties(title="데이터가 없습니다.")
-    df_reset = df.reset_index().rename(columns={'index': 'Date'})
-
-    min_price = df_reset['Close'].min()
-    max_price = df_reset['Close'].max()
-    price_range = max_price - min_price
-    target_y_value = min_price + (price_range * 0.001)
-
-    background = alt.Chart(pd.DataFrame()).mark_text()
-    phase_blocks_empty = True
-
-    if "Phase" in df_reset.columns and not df_reset['Phase'].isnull().all():
-        df_phases = df_reset[['Date', 'Phase']].copy()
-        df_phases['Phase'] = df_phases['Phase'].fillna('N/A')
-        df_phases['New_Block'] = df_phases['Phase'] != df_phases['Phase'].shift(1)
-        df_phases['Block_ID'] = df_phases['New_Block'].cumsum()
-
-        phase_blocks = df_phases.groupby('Block_ID').agg(
-            start_date=('Date', 'min'),
-            end_date=('Date', 'max'),
-            Phase=('Phase', 'first')
-        ).reset_index()
-        phase_blocks = phase_blocks[phase_blocks['Phase'] != 'N/A']
-
-        if not phase_blocks.empty:
-            phase_blocks_empty = False
-            domain = ['상승', '하락', '박스권']
-            range_ = ['#ff9999', '#aaccff', '#d9d9d9']
-            background = alt.Chart(phase_blocks).mark_rect(opacity=0.5).encode(
-                x=alt.X('start_date:T', title='날짜'),
-                x2=alt.X2('end_date:T'),
-                color=alt.Color(
-                    'Phase:N',
-                    scale=alt.Scale(domain=domain, range=range_),
-                    legend=alt.Legend(title='추세 구간')
-                ),
-                tooltip=['start_date:T', 'end_date:T', 'Phase:N']
-            )
-
-    line_chart = alt.Chart(df_reset).mark_line(color='gray').encode(
-        x=alt.X('Date:T', title='날짜'),
-        y=alt.Y('Close:Q', title='가격', scale=alt.Scale(zero=False)),
-        tooltip=['Date:T', 'Close:Q']
-    )
-
-    hover_selection = alt.selection_point(on='mouseover', empty='all', fields=['Date'])
-    pinpoint_layer = alt.Chart(pd.DataFrame()).mark_text()
-
-    if pinpoints_df is not None and not pinpoints_df.empty:
-        pinpoints_df_copy = pinpoints_df.copy()
-        pinpoints_df_copy['Date'] = pd.to_datetime(pinpoints_df_copy['Date'])
-        merged_pins = pd.merge(
-            df_reset[['Date', 'Close']], pinpoints_df_copy, on='Date', how='inner'
+def visualize_phases_altair(df, pinpoints_df=None):
+    if df.empty: return alt.Chart(pd.DataFrame()).mark_text()
+    df_r = df.reset_index().rename(columns={"index":"Date"})
+    
+    bg = alt.Chart(pd.DataFrame()).mark_text()
+    if "Phase" in df_r.columns:
+        df_p = df_r.copy()
+        df_p["gid"] = (df_p["Phase"] != df_p["Phase"].shift()).cumsum()
+        blocks = df_p.groupby("gid").agg(s=("Date","min"), e=("Date","max"), p=("Phase","first")).reset_index()
+        dom = ["상승","하락","박스권"]; rng = ["#ff9999","#aaccff","#d9d9d9"]
+        bg = alt.Chart(blocks).mark_rect(opacity=0.4).encode(
+            x="s:T", x2="e:T", color=alt.Color("p:N", scale=alt.Scale(domain=dom, range=rng))
         )
 
-        if not merged_pins.empty:
-            rule = alt.Chart(merged_pins).mark_rule(
-                color='black', strokeDash=[3, 3]
-            ).encode(x='Date:T')
+    line = alt.Chart(df_r).mark_line(color="gray").encode(x="Date:T", y=alt.Y("Close:Q", scale=alt.Scale(zero=False)))
+    return (bg + line).properties(height=400).interactive()
 
-            points = alt.Chart(merged_pins).mark_point(
-                filled=True,
-                stroke='black',
-                strokeWidth=0.5
-            ).transform_calculate(
-                pin_y_position=f"{target_y_value}"
-            ).encode(
-                x='Date:T',
-                y=alt.Y('pin_y_position:Q', title='가격'),
-                tooltip=[
-                    alt.Tooltip('Date:T', title='날짜', format='%Y-%m-%d'),
-                    alt.Tooltip('Event:N', title='이벤트')
-                ],
-                size=alt.condition(
-                    hover_selection,
-                    alt.value(200),
-                    alt.value(100)
-                )
-            ).add_params(hover_selection)
-            pinpoint_layer = rule + points
-
-    if phase_blocks_empty:
-        base_chart = line_chart
-    else:
-        base_chart = background + line_chart
-
-    target_y_df = pd.DataFrame({'target_y': [target_y_value]})
-    base_line = alt.Chart(target_y_df).mark_rule(
-        color='black', opacity=0
-    ).encode(y='target_y:Q')
-
-    main_chart = (base_chart + pinpoint_layer + base_line).properties(height=400)
-    return main_chart
-
-# ----------------------------------------------------------------------
-# 7. 상단 헤더 (문구 2줄)
-# ----------------------------------------------------------------------
-st.markdown(
-    """
-    <div class="app-header">
-        <div style="display:flex; flex-direction:column; gap:0.1rem;">
-            <div class="app-title">따라가기 힘든 금융 정보,</div>
-            <div class="app-title">📈 투자위키로 한 발 앞서가세요!</div>
-        </div>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-# ----------------------------------------------------------------------
-# 8. 홈 화면 렌더 함수
-# ----------------------------------------------------------------------
-def render_home():
-    left_col, spacer_col, mid_col = st.columns([2.4, 0.5, 1.6])
-
-    with left_col:
-        st.subheader("🔍 찾는 종목")
-        search_input = st.text_input(
-            "종목 코드 / 티커를 입력하세요",
-            value=st.session_state.selected_ticker,
-            placeholder="예: 005930 (삼성전자), AAPL (Apple)",
-            key="search_input_home",
-        )
-        search_btn = st.button("이 종목 분석하기", type="primary")
-
-        if search_btn and search_input.strip():
-            st.session_state.selected_ticker = search_input.strip()
-            st.session_state.page_mode = "DETAIL"
-
-    with spacer_col:
-        st.write("")
-
-    with mid_col:
-        header_col, btn_col, time_col = st.columns([1.4, 0.4, 1.2])
-
-        with header_col:
-            st.markdown(
-                "<h4 style='margin-bottom:0.2rem; white-space:nowrap;'>🔥 인기종목</h4>",
-                unsafe_allow_html=True,
-            )
-
-        with btn_col:
-            if st.button("⟳", help="인기종목 리스트 새로고침"):
-                st.session_state.popular_sample = random.sample(POPULAR_STOCKS_ALL, 5)
-                st.session_state.popular_refresh_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        with time_col:
-            st.markdown(
-                f"""
-                <p style="font-size:0.70rem; color:#999; margin-top:1.1rem; text-align:right;">
-                    마지막 새로고침: {st.session_state.popular_refresh_time}
-                </p>
-                """,
-                unsafe_allow_html=True,
-            )
-
-        for stock in st.session_state.popular_sample:
-            code = stock["code"]
-            name = stock["name"]
-            if st.button(f"{name} ({code})", key=f"popular_btn_{code}", use_container_width=True):
-                st.session_state.selected_ticker = code
-                st.session_state.page_mode = "DETAIL"
-
-    st.markdown("---")
-
-    st.subheader("📰 많이 본 뉴스")
-    st.caption("※ 현재는 예시입니다. 나중에 실제 리포트/뉴스 데이터를 연결하면 됩니다.")
-
-    example_news = [
-        {"title": "[예시] 삼성전자 AI 반도체 수요 급증 리포트", "source": "뉴스1", "date": "2025-11-20"},
-        {"title": "[예시] 미국 나스닥 기술주 조정, 향후 전망은?", "source": "연합뉴스", "date": "2025-11-18"},
-        {"title": "[예시] 방산·조선주 강세, 한화에어로스페이스·HD현대중공업 급등", "source": "매일경제", "date": "2025-11-15"},
-    ]
-
-    for i, news in enumerate(example_news, start=1):
-        with st.expander(f"{i}. {news['title']}"):
-            st.write(f"출처: {news['source']}")
-            st.write(f"날짜: {news['date']}")
-            st.info("👉 이 영역에 실제 뉴스 본문 또는 링크를 나중에 넣으면 됩니다.")
-
-# ----------------------------------------------------------------------
-# 9. 상세 분석 화면 렌더 함수
-# ----------------------------------------------------------------------
-def render_detail():
-    ticker = st.session_state.selected_ticker
-
-    top_cols = st.columns([1, 3])
-    with top_cols[0]:
-        if st.button("← 홈으로 돌아가기"):
-            st.session_state.page_mode = "HOME"
-            st.rerun()
-    with top_cols[1]:
-        st.markdown(f"### 📊 {ticker} 상세 분석")
-
-    left_col, right_col = st.columns([1, 3])
-
-    with left_col:
-        st.markdown("#### ⚙️ 분석 설정")
-
-        start_date = st.date_input("시작일", pd.to_datetime("2024-01-01"))
-        end_date = st.date_input("종료일", pd.to_datetime("2024-12-31"))
-
-        st.markdown("##### 구간화 파라미터")
-        window_length = st.number_input(
-            "스무딩 윈도우 (홀수)", min_value=3, max_value=21, value=5, step=2
-        )
-        polyorder = st.slider("스무딩 다항식 차수", 1, 5, 3)
-        min_days1 = st.slider("초기 짧은 구간 병합 일수", 1, 10, 2)
-        min_days2 = st.slider("최종 짧은 구간 병합 일수", 1, 10, 2)
-        adjust_window = st.slider("전환점 보정 윈도우", 1, 10, 2)
-        min_hits = st.slider("박스권 최소 교차 횟수", 1, 20, 9)
-        box_window = st.slider("박스권 판정 윈도우", 1, 20, 10)
-
-    with right_col:
-        df_raw = load_data(ticker, start_date, end_date)
-        if df_raw is None or df_raw.empty:
-            st.warning("데이터를 불러올 수 없습니다. 종목 코드/티커와 기간을 다시 확인해 주세요.")
-            return
-
-        display_metrics(df_raw)
-
-        tab1, tab2, tab3, tab4 = st.tabs(
-            ["📈 기본 시세", "🧠 AI 추세 분석", "📐 기술적 지표", "📊 수익률 분석"]
-        )
-
-        with tab1:
-            candle_chart = visualize_candlestick(df_raw)
-            st.altair_chart(candle_chart, use_container_width=True)
-            st.subheader("일별 시세 데이터")
-            st.dataframe(
-                df_raw.sort_index(ascending=False).head(10),
-                use_container_width=True
-            )
-
-        with tab2:
-            if len(df_raw) < window_length:
-                st.warning(f"데이터 부족: 최소 {window_length}일 이상 필요합니다.")
-            else:
-                with st.spinner("추세 패턴 분석 중..."):
-                    df_processed = detect_market_phases(
-                        df_raw, window_length, polyorder,
-                        min_days1, min_days2,
-                        adjust_window, min_hits, box_window
-                    )
-                    fig = visualize_phases_altair_all_interactions(
-                        df_processed, pinpoints_df=pinpoints_df
-                    )
-                    st.altair_chart(fig, use_container_width=True)
-
-                if "Phase" in df_processed.columns:
-                    counts = df_processed['Phase'].value_counts()
-                    st.markdown("#### 추세 분포 요약")
-                    c1, c2, c3 = st.columns(3)
-                    c1.metric("상승 구간", f"{counts.get('상승', 0)}일")
-                    c2.metric("하락 구간", f"{counts.get('하락', 0)}일")
-                    c3.metric("박스권", f"{counts.get('박스권', 0)}일")
-
-                st.subheader("뉴스 이벤트 매칭")
-                st.dataframe(pinpoints_df, use_container_width=True, hide_index=True)
-
-        with tab3:
-            st.subheader("📐 기술적 지표 분석")
-            st.info("""
-            **💡 초보자를 위한 1분 요약**
-            * **볼린저 밴드:** 주가가 회색 띠를 벗어나면 다시 돌아오려는 성질이 있어요. (밴드 상단=비쌈, 하단=쌈)
-            * **MACD:** 빨간 막대가 커지면 '상승세', 파란 막대가 커지면 '하락세'입니다.
-            * **RSI:** 70을 넘으면 '과열(비쌈)', 30 밑이면 '침체(쌈)' 신호입니다.
-            """)
-            tech_chart = visualize_technical_indicators(df_raw)
-            st.altair_chart(tech_chart, use_container_width=True)
-
-            with st.expander("📚 지표 상세 해석 가이드 (눌러서 보기)"):
-                st.markdown("""
-                ### 1. 볼린저 밴드 (Bollinger Bands)
-                - **무엇인가요?** 주가가 다니는 '길'이라고 생각하세요. 
-                - **해석법:** 주가는 보통 밴드 안에서 움직입니다. 
-                    - 캔들이 **위쪽 선**을 치면? 단기 고점일 수 있습니다. (매도 고려)
-                    - 캔들이 **아래쪽 선**을 치면? 단기 저점일 수 있습니다. (매수 고려)
-                    
-                ### 2. MACD (추세)
-                - **무엇인가요?** 주가의 '방향'과 '에너지'를 보여줍니다.
-                - **해석법:**
-                    - **빨간 막대**가 점점 길어지면 상승 힘이 강해지는 것입니다.
-                    - **파란 막대**가 줄어들면서 빨간색으로 바뀌려는 순간이 '매수 타이밍'으로 불립니다.
-                    
-                ### 3. RSI (상대강도지수)
-                - **무엇인가요?** 시장의 '과열' 여부를 0~100 점수로 매긴 것입니다.
-                - **해석법:**
-                    - **70 이상 (점선 위):** "너무 뜨겁다!" 사람들이 너무 많이 사서 비싼 상태일 수 있습니다. (조심!)
-                    - **30 이하 (점선 아래):** "너무 차갑다!" 사람들이 너무 많이 팔아서 싼 상태일 수 있습니다. (기회?)
-                """)
-
-        with tab4:
-            st.subheader("📊 수익률 퍼포먼스")
-            st.caption("이 기간 동안 보유했을 때의 누적 수익률과 변동성입니다.")
-            return_chart = visualize_return_analysis(df_raw)
-            st.altair_chart(return_chart, use_container_width=True)
-
-# ----------------------------------------------------------------------
-# 10. 라우팅 (HOME / DETAIL)
-# ----------------------------------------------------------------------
-if st.session_state.page_mode == "DETAIL" and st.session_state.selected_ticker:
-    render_detail()
-else:
-    st.session_state.page_mode = "HOME"
-    render_home()
-
-# ----------------------------------------------------------------------
-# 12. AI 주식 상담 챗봇 (프로젝트 + 히스토리)
-# ----------------------------------------------------------------------
-
-# 헬퍼: 새 채팅 생성
-def _create_new_chat(project_id=None):
-    """특정 프로젝트 내에 새 채팅 세션을 생성하고 현재 세션으로 설정."""
-    if project_id is None:
-        project_id = st.session_state.current_project_id
-
-    store = st.session_state.chat_store
-    projects = store.setdefault("projects", {})
-    project = projects[project_id]
-    chats = project.setdefault("chats", {})
-
-    new_id = str(uuid.uuid4())
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    new_chat = {
-        "title": f"새 대화 ({datetime.now().strftime('%m/%d %H:%M')})",
-        "category": "기타",
-        "created_at": now_str,
-        "messages": [
-            {"role": "assistant", "content": "안녕하세요! 저는 구글 Gemini입니다. 주식에 대해 물어보세요! 🌕"}
-        ],
+# 챗봇 함수
+def render_floating_chatbot():
+    st.markdown("""
+    <style>
+    div[data-testid="stPopover"] {
+        position: fixed !important;
+        bottom: 20px !important;
+        right: 20px !important;
+        width: 80px !important;  
+        z-index: 999999 !important;
     }
-    chats[new_id] = new_chat
-
-    st.session_state.current_project_id = project_id
-    st.session_state.current_chat_id = new_id
-    st.session_state.chat_title = new_chat["title"]
-    st.session_state.chat_category = new_chat["category"]
-    st.session_state.messages = new_chat["messages"]
-    st.session_state.chat_history = chats
-
-    save_chat_history(store)
-    st.rerun()
-
-# 헬퍼: 새 프로젝트 생성
-def _create_new_project():
-    """새 프로젝트를 생성하고, 그 안에 기본 대화 하나를 만든다."""
-    store = st.session_state.chat_store
-    projects = store.setdefault("projects", {})
-
-    new_pid = str(uuid.uuid4())
-    now_str = datetime.now().strftime("%Y-%m-%d %H:%M")
-    projects[new_pid] = {
-        "name": f"새 프로젝트 {datetime.now().strftime('%m/%d %H:%M')}",
-        "created_at": now_str,
-        "chats": {},
+    div[data-testid="stPopover"] > button {
+        width: 100% !important;
+        height: 100% !important;
+        min-height: unset !important;
+        min-width: unset !important;
+        border-radius: 50% !important;
+        background-color: #3b82f6 !important;
+        color: white !important;
+        border: none !important;
+        box-shadow: 0 4px 10px rgba(0,0,0,0.3) !important;
+        display: flex !important;
+        align-items: center !important;
+        justify-content: center !important;
+        padding: 0 !important;
     }
-    st.session_state.current_project_id = new_pid
-    save_chat_history(store)
+    div[data-testid="stPopover"] > button:hover {
+        background-color: #1d4ed8 !important;
+        transform: scale(1.1) !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
-    # 새 프로젝트 안에 기본 채팅 하나 생성
-    _create_new_chat(project_id=new_pid)
+    with st.popover("💬"):
+        st.markdown("### 🤖 투자 비서")
+        st.caption("궁금한 점을 물어보세요.")
+        if "messages" not in st.session_state:
+            st.session_state.messages = [{"role": "assistant", "content": "안녕하세요! 무엇을 도와드릴까요?"}]
+        
+        msgs = st.container(height=300)
+        with msgs:
+            for m in st.session_state.messages:
+                st.chat_message(m["role"]).write(m["content"])
+        
+        if prompt := st.chat_input("질문 입력..."):
+            st.session_state.messages.append({"role":"user", "content":prompt})
+            msgs.chat_message("user").write(prompt)
+            # 더미 응답
+            ans = f"'{prompt}'에 대한 정보입니다. (AI 연결 필요)"
+            st.session_state.messages.append({"role":"assistant", "content":ans})
+            msgs.chat_message("assistant").write(ans)
 
-# 헬퍼: 대화 삭제
-def _delete_chat(chat_id_to_delete):
-    """현재 프로젝트에서 지정된 채팅을 삭제하고, 다른 채팅 또는 새 채팅을 활성화."""
-    store = st.session_state.chat_store
-    pid = st.session_state.current_project_id
-    project = store["projects"][pid]
-    chats = project.get("chats", {})
 
-    if chat_id_to_delete in chats:
-        del chats[chat_id_to_delete]
-        project["chats"] = chats
-        st.session_state.chat_history = chats
-        save_chat_history(store)
+# =========================
+# 5. 뉴스 크롤러 (실시간 복구)
+# =========================
+UA_POOL = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15",
+]
+REFERER_POOL = ["https://news.naver.com/", "https://search.naver.com/"]
+JITTER_RANGE = (0.2, 0.8)
+CONNECT_TIMEOUT = 3
+READ_TIMEOUT = 5
+RESULTS_PER_PAGE = 10
 
-        if chats:
-            # 남은 채팅 중 가장 최신으로 이동
-            sorted_history = sorted(
-                chats.items(),
-                key=lambda item: item[1].get("created_at", "1970-01-01 00:00"),
-                reverse=True
-            )
-            new_current_id = sorted_history[0][0]
-            st.session_state.current_chat_id = new_current_id
-            st.session_state.chat_title = chats[new_current_id]["title"]
-            st.session_state.chat_category = chats[new_current_id]["category"]
-            st.session_state.messages = chats[new_current_id]["messages"]
-        else:
-            # 채팅이 하나도 없으면 새 채팅 생성
-            _create_new_chat(project_id=pid)
-            return
+def normalize_url(u: str) -> str:
+    if not u: return ""
+    u = u.strip()
+    parts = urlsplit(u)
+    scheme = parts.scheme or "https"
+    netloc = parts.netloc
+    path = parts.path
+    if not netloc:
+        if u.startswith(("news.naver.com", "n.news.naver.com")):
+            pieces = u.split("/", 1)
+            netloc = pieces[0]; path = "/" + pieces[1] if len(pieces) > 1 else "/"
+        else: return re.sub(r"(\?.*|#.*)$", "", u)
+    if netloc in ("news.naver.com", "m.news.naver.com"): netloc = "n.news.naver.com"
+    return urlunsplit((scheme, netloc, path, "", ""))
 
-        st.rerun()
+def make_session() -> requests.Session:
+    s = requests.Session()
+    retries = Retry(total=2, backoff_factor=0.3, status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
+    adapter = HTTPAdapter(max_retries=retries, pool_connections=10, pool_maxsize=20)
+    s.mount("https://", adapter); s.mount("http://", adapter)
+    s.headers.update({"User-Agent": random.choice(UA_POOL), "Referer": random.choice(REFERER_POOL)})
+    return s
 
-# --- 사이드바 시작 ---
-with st.sidebar:
-    st.markdown("---")
-    st.header("🤖 Gemini 주식 비서")
-
-    # API 키
-    api_key = ""
-    if "GOOGLE_API_KEY" in st.secrets:
-        api_key = st.secrets["GOOGLE_API_KEY"]
-        st.success("API 키가 연동되었습니다! ✅")
-    else:
-        key_input = st.text_input("Google API Key를 입력하세요", type="password", key="sidebar_api_key_input")
-        if key_input:
-            api_key = key_input
-        if not api_key:
-            st.info("API 키를 입력하거나, Secrets에 설정하면 자동으로 연동됩니다.")
-            st.markdown("[👉 키 발급받으러 가기](https://aistudio.google.com/app/apikey)")
-
-    # -----------------------------
-    # (0) 프로젝트 관리 UI
-    # -----------------------------
-    st.markdown("### 📁 프로젝트")
-
-    projects = st.session_state.chat_store["projects"]
-    # 프로젝트가 혹시라도 비어 있으면 하나 생성
-    if not projects:
-        _create_new_project()
-
-    # 프로젝트 선택
-    project_items = list(projects.items())
-    project_labels = [proj["name"] for _, proj in project_items]
-    project_id_list = [pid for pid, _ in project_items]
-
-    # 현재 프로젝트 인덱스
+def get_with_backoff(session, url, **kwargs):
+    time.sleep(random.uniform(*JITTER_RANGE))
     try:
-        current_proj_index = project_id_list.index(st.session_state.current_project_id)
-    except ValueError:
-        current_proj_index = 0
-        st.session_state.current_project_id = project_id_list[0]
+        resp = session.get(url, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT))
+        if 200 <= resp.status_code < 300: return resp.text
+    except: pass
+    return None
 
-    selected_proj_name = st.selectbox(
-        "프로젝트 선택",
-        project_labels,
-        index=current_proj_index,
-        key="project_select_box",
-    )
-    label_to_pid = {proj["name"]: pid for pid, proj in project_items}
-    selected_proj_id = label_to_pid[selected_proj_name]
+def extract_news_content(url: str, session: requests.Session) -> Tuple[str, str, str, str]:
+    html = get_with_backoff(session, normalize_url(url))
+    if not html: raise Exception("No HTML")
+    soup = BeautifulSoup(html, "html.parser")
+    
+    # 언론사
+    company = "정보 없음"
+    img = soup.select_one("a.media_end_head_top_logo img")
+    if img: company = img.get("title") or img.get("alt") or company
+    
+    # 제목
+    title = "정보 없음"
+    for sel in ["h2#title_area", "div.media_end_head_title", "h1#newsct_article_title"]:
+        t = soup.select_one(sel)
+        if t: title = t.get_text(strip=True); break
+        
+    # 날짜
+    date = "정보 없음"
+    d = soup.select_one("span.media_end_head_info_datestamp_time")
+    if d: date = d.get("data-date-time") or d.get_text(strip=True)
+    
+    return company, title, "", date
 
-    if selected_proj_id != st.session_state.current_project_id:
-        st.session_state.current_project_id = selected_proj_id
-        # 프로젝트 바뀌면, 해당 프로젝트의 가장 최신 채팅으로 이동
-        chats = projects[selected_proj_id].get("chats", {})
-        if chats:
-            sorted_history = sorted(
-                chats.items(),
-                key=lambda item: item[1].get("created_at", "1970-01-01 00:00"),
-                reverse=True
-            )
-            st.session_state.current_chat_id = sorted_history[0][0]
-            st.session_state.chat_title = sorted_history[0][1].get("title", "새 대화")
-            st.session_state.chat_category = sorted_history[0][1].get("category", "기타")
-            st.session_state.messages = sorted_history[0][1].get("messages", [])
+@st.cache_data(ttl=600)
+def get_popular_news() -> List[Dict[str, str]]:
+    query = "증시"
+    today = datetime.today().strftime("%Y.%m.%d")
+    session = make_session()
+    
+    # 검색 URL 빌드 (네이버 뉴스 검색)
+    base = "https://search.naver.com/search.naver"
+    params = {"where": "news", "query": query, "sm": "tab_opt", "sort": "1", "ds": today, "de": today}
+    url = f"{base}?{urlencode(params)}"
+    
+    html = get_with_backoff(session, url)
+    if not html: return []
+    
+    soup = BeautifulSoup(html, "html.parser")
+    anchors = soup.select("a.news_tit")
+    links = []
+    for a in anchors:
+        href = a.get("href")
+        if href and "news.naver.com" in href: links.append(href)
+        if len(links) >= 10: break
+    
+    results = []
+    for l in links:
+        try:
+            comp, tit, _, d = extract_news_content(l, session)
+            results.append({"title": tit, "link": l, "source": comp, "date": d})
+        except: continue
+        if len(results) >= 6: break
+        
+    return results
+
+
+# ------------------------------------------------------------------
+# 5. 메인 화면 렌더링 (홈 / 분석)
+# ------------------------------------------------------------------
+def render_home():
+    # 상단 여백
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # 중앙 정렬 (로고 및 검색창)
+    c1, c2, c3 = st.columns([1, 2, 1])
+    with c2:
+        # [수정됨] 로고 크기 조정 (width=300) 및 파일 확인
+        logo_file = "image_3.png" 
+        
+        if os.path.exists(logo_file):
+            # use_column_width=True 대신 width=300 사용 (화면 짤림 방지)
+            st.image(logo_file, width=300) 
         else:
-            # 채팅 없으면 새 채팅 생성
-            _create_new_chat(project_id=selected_proj_id)
-        st.session_state.chat_history = projects[selected_proj_id].get("chats", {})
-        st.rerun()
+            st.markdown('<div class="main-logo-text">InvestWiki</div>', unsafe_allow_html=True)
 
-    # 현재 프로젝트 이름 수정
-    current_project = projects[st.session_state.current_project_id]
-    new_proj_name = st.text_input(
-        "현재 프로젝트 이름",
-        value=current_project.get("name", ""),
-        key="current_project_name_input",
-    )
-    if new_proj_name != current_project.get("name", "") and new_proj_name.strip():
-        current_project["name"] = new_proj_name.strip()
-        save_chat_history(st.session_state.chat_store)
-
-    # 새 프로젝트
-    st.button("➕ 새 프로젝트 만들기", on_click=_create_new_project, use_container_width=True)
-
-    st.markdown("---")
-
-    # -----------------------------
-    # (1) 대화/카테고리 관리 UI
-    # -----------------------------
-    if not api_key:
-        st.warning("API 키가 설정되지 않아 챗봇 기능을 사용할 수 없습니다.")
-    else:
-        st.button("➕ 새 대화 시작", on_click=_create_new_chat, use_container_width=True, type="primary")
-
-        st.markdown("### 💬 저장된 대화")
-
-        # 카테고리 필터
-        filter_category = st.selectbox(
-            "카테고리 필터",
-            ["전체"] + CHAT_CATEGORIES,
-            index=0,
-            key="filter_category_select",
-            help="저장된 대화를 카테고리별로 필터링해서 볼 수 있어요.",
+        # 검색창
+        st.markdown("<br>", unsafe_allow_html=True)
+        search_val = st.text_input(
+            "검색", placeholder="종목명 또는 티커 (예: 삼성전자, 005930)", 
+            label_visibility="collapsed"
+        )
+        if search_val:
+            st.session_state.selected_stock = search_val.split()[0]
+            st.rerun()
+            
+        st.markdown(
+            """<div style="text-align:center; color:#888; margin-top:10px; font-size:0.9rem;">
+            🔍 인기 검색: 삼성전자, 테슬라, 비트코인, 엔비디아
+            </div>""", unsafe_allow_html=True
         )
 
-        # 현재 프로젝트의 히스토리
-        cur_pid = st.session_state.current_project_id
-        cur_project = st.session_state.chat_store["projects"][cur_pid]
-        st.session_state.chat_history = cur_project.get("chats", {})
-        history_items = []
-        for cid, info in st.session_state.chat_history.items():
-            if filter_category == "전체" or info.get("category", "기타") == filter_category:
-                history_items.append((cid, info))
+    st.markdown("<br><br>", unsafe_allow_html=True)
 
-        sorted_history_items = sorted(
-            history_items,
-            key=lambda item: item[1].get("created_at", "1970-01-01 00:00"),
-            reverse=True
-        )
-
-        if not sorted_history_items:
-            st.caption("필터링된 대화가 없습니다.")
+    # 하단 2단 레이아웃 (뉴스 | 인기종목)
+    col_news, col_pop = st.columns([1.2, 1])
+    
+    with col_news:
+        st.markdown("### 📰 실시간 증시 뉴스")
+        # [수정됨] 실제 크롤링 함수 호출
+        with st.spinner("최신 뉴스를 불러오는 중..."):
+            news_data = get_popular_news()
+            
+        if not news_data:
+            st.info("뉴스를 불러오지 못했습니다. 잠시 후 다시 시도해주세요.")
         else:
-            radio_options = []
-            for cid, info in sorted_history_items:
-                title = info.get('title', '제목 없음')
-                category = info.get('category', '기타')
-                try:
-                    time_obj = datetime.strptime(info.get("created_at", "1970-01-01 00:00"), "%Y-%m-%d %H:%M")
-                    time_str = time_obj.strftime("%m/%d %H:%M")
-                except Exception:
-                    time_str = info.get("created_at", "")
-                label = f"**[{category}]** {title} <br><small style='color: #888;'>{time_str}</small>"
-                radio_options.append((label, cid))
+            for n in news_data:
+                with st.expander(n['title']):
+                    st.write(f"{n['source']} | {n['date']}")
+                    st.markdown(f"[기사 원문 보기]({n['link']})")
 
-            try:
-                current_index = [cid for lbl, cid in radio_options].index(st.session_state.current_chat_id)
-            except ValueError:
-                current_index = 0
-                st.session_state.current_chat_id = sorted_history_items[0][0]
-
-            selected_label = st.radio(
-                "대화 선택",
-                options=[lbl for lbl, cid in radio_options],
-                index=current_index,
-                key="chat_select_radio",
-                label_visibility="collapsed",
-                format_func=lambda x: x.split('<br>')[0],
-            )
-            label_to_id = {lbl: cid for lbl, cid in radio_options}
-            selected_id = label_to_id[selected_label]
-
-            if selected_id != st.session_state.current_chat_id:
-                st.session_state.current_chat_id = selected_id
-                st.session_state.chat_title = st.session_state.chat_history[selected_id]["title"]
-                st.session_state.chat_category = st.session_state.chat_history[selected_id]["category"]
-                st.session_state.messages = st.session_state.chat_history[selected_id]["messages"]
+    with col_pop:
+        # [수정됨] 새로고침 버튼 및 인기종목 리스트
+        pc1, pc2 = st.columns([3, 1])
+        with pc1: st.markdown("### 🔥 인기 종목")
+        with pc2: 
+            if st.button("⟳", help="새로고침"):
+                random.shuffle(st.session_state.popular_indices)
+        
+        # 상위 6개 표시
+        for i in range(6):
+            idx = st.session_state.popular_indices[i]
+            name, code = ALL_POPULAR_STOCKS[idx]
+            if st.button(f"📈 {name} ({code})", key=f"home_pop_{code}"):
+                st.session_state.selected_stock = code
                 st.rerun()
 
-        # -----------------------------
-        # (2) 현재 대화의 제목/카테고리 수정 및 삭제
-        # -----------------------------
-        st.markdown("### ✏️ 현재 대화 정보")
+def render_analysis(page_id):
+    # 현재 페이지 정보 찾기
+    current_page = next((p for p in st.session_state.analysis_pages if p["id"] == page_id), None)
+    
+    if not current_page:
+        st.error("페이지를 찾을 수 없습니다.")
+        return
 
-        st.session_state.chat_title = st.text_input(
-            "대화 제목(주제)",
-            value=st.session_state.chat_title,
-            key="current_chat_title_input",
-            help="예: 'RSI 기본 개념 질문', '테슬라 실적 관련 뉴스 요약' 등",
+    # 종목 선택 (아직 선택 안 된 경우)
+    if not current_page["ticker"]:
+        st.title(f"📊 {current_page['title']}")
+        ticker_input = st.text_input("분석할 종목 코드 입력 (예: 005930)", key=f"input_{page_id}")
+        if st.button("분석 시작", key=f"btn_{page_id}"):
+            stock_name = get_stock_name(ticker_input)
+            current_page["ticker"] = ticker_input
+            current_page["title"] = f"{stock_name}" # 제목 업데이트
+            st.rerun()
+        return
+
+    # 분석 화면 렌더링
+    ticker = current_page["ticker"]
+    stock_name = get_stock_name(ticker)
+
+    # --- [메인] 분석 결과 ---
+    start_date = pd.to_datetime("2024-01-01")
+    end_date = pd.to_datetime("2024-12-31")
+
+    df = load_data(ticker, start_date, end_date)
+    
+    if df is None:
+        st.error(f"'{ticker}'에 대한 데이터를 찾을 수 없습니다. 티커를 확인해주세요.")
+        return
+
+    st.title(f"{stock_name}")
+    
+    col_spacer, col_select = st.columns([4, 1])
+
+    with col_select:
+        # 1. 선택 가능한 메뉴 리스트 정의
+        tab_options = ["📊 차트/시세", "🧠 AI 추세 분석", "📐 기술적 지표", "💰 수익률"]
+
+        # 2. 오른쪽 작은 컬럼에 셀렉트박스를 배치합니다.
+        selected_tab = st.selectbox(
+            "분석 항목 선택",  # 라벨 (label_visibility로 숨길 예정이라 내용은 중요치 않음)
+            tab_options, 
+            index=0,
+            label_visibility="collapsed" # 👈 'collapsed'로 설정하면 라벨(제목)이 숨겨져서 더 깔끔해집니다.
         )
-        st.session_state.chat_category = st.selectbox(
-            "카테고리",
-            CHAT_CATEGORIES,
-            key="current_chat_category_select",
-            index=CHAT_CATEGORIES.index(st.session_state.chat_category)
-            if st.session_state.chat_category in CHAT_CATEGORIES
-            else CHAT_CATEGORIES.index("기타"),
-        )
+    display_metrics(df)
+    st.markdown("---") # 구분선 (선택사항)
 
-        cur_id = st.session_state.current_chat_id
-        if cur_id in st.session_state.chat_history:
-            st.session_state.chat_history[cur_id]["title"] = st.session_state.chat_title
-            st.session_state.chat_history[cur_id]["category"] = st.session_state.chat_category
-            # 변경사항 즉시 저장
-            save_chat_history(st.session_state.chat_store)
+    # 3. 선택된 값에 따라 다른 내용 렌더링
+    if selected_tab == "📊 차트/시세":
+        st.markdown("##### 일봉 캔들 차트")
+        st.altair_chart(visualize_candlestick(df), use_container_width=True)
+    elif selected_tab == "🧠 AI 추세 분석":
+        with st.spinner("AI가 추세를 분석 중입니다..."):
+            df_ai = detect_market_phases(df, 5, 3, 2, 2, 2, 9, 10)
+        st.markdown("##### AI 추세 구간 탐지")
+        st.altair_chart(visualize_phases_altair(df_ai), use_container_width=True)
+        
+        if "Phase" in df_ai.columns:
+            c = df_ai["Phase"].value_counts()
+            col1, col2, col3 = st.columns(3)
+            col1.metric("상승 일수", f"{c.get('상승',0)}일")
+            col2.metric("하락 일수", f"{c.get('하락',0)}일")
+            col3.metric("박스권", f"{c.get('박스권',0)}일")
 
-        st.button(
-            "🗑️ 현재 대화 삭제",
-            on_click=_delete_chat,
-            args=(st.session_state.current_chat_id,),
-            use_container_width=True
-        )
+    elif selected_tab == "📐 기술적 지표":
+        st.subheader("📐 기술적 지표 분석")
+        
+        # 1. 볼린저 밴드 설명 (정의 + 비유 + 툴팁)
+        st.markdown("##### 1. 볼린저 밴드 (Bollinger Bands)", help="""
+        **이동평균선을 기준으로 주가의 등락 범위를 표준편차로 계산해 표시한 지표입니다.**
+        
+        쉽게 말해, **주가가 평소에 다니는 '도로의 폭'**이라고 생각하면 됩니다.
+        * **상단에 다다르면:** 주가가 단기적으로 너무 많이 올랐다는 신호입니다. (고평가/매도 고려)
+        * **하단에 다다르면:** 주가가 단기적으로 너무 많이 떨어졌다는 신호입니다. (저평가/매수 고려)
+        """)
+        
+        # 2. RSI 설명 (정의 + 비유 + 툴팁)
+        st.markdown("##### 2. RSI (상대강도지수)", help="""
+        **일정 기간 동안 주가가 전일 대비 얼마나 상승했는지를 백분율(%)로 나타낸 지표입니다.**
+        
+        쉽게 말해, **시장의 분위기가 얼마나 뜨거운지 보여주는 '온도계(0~100점)'**입니다.
+        * **70점을 넘어서면:** 사는 사람이 너무 많아 '과열'된 상태입니다. (가격 하락 주의)
+        * **30점 아래로 내려가면:** 파는 사람이 너무 많아 '침체'된 상태입니다. (반등 기회 가능)
+        """)
 
-        st.markdown("---")
+        # 3. 차트 출력
+        st.altair_chart(visualize_technical_indicators(df), use_container_width=True)
 
-        # -----------------------------
-        # (3) 실제 Gemini 채팅 영역
-        # -----------------------------
-        st.session_state.messages = st.session_state.chat_history[cur_id]["messages"]
+    elif selected_tab == "💰 수익률":
+        st.markdown("##### 보유 기간 누적 수익률")
+        st.altair_chart(visualize_return_analysis(df), use_container_width=True)
 
-        chat_container = st.container()
-        with chat_container:
-            for msg in st.session_state.messages:
-                if msg["role"] == "user":
-                    st.chat_message("user").write(msg["content"])
-                else:
-                    st.chat_message("assistant", avatar="🤖").write(msg["content"])
+def render_sidebar():
+    with st.sidebar: 
+        # 1. 아이콘 URL 준비 (흰색)
+        url_hamb = "https://img.icons8.com/ios-glyphs/60/ffffff/menu--v1.png"
+        url_home = "https://img.icons8.com/ios-glyphs/60/ffffff/home.png"
+        url_plus = "https://img.icons8.com/ios-glyphs/60/ffffff/plus-math.png"
 
-        if prompt := st.chat_input("질문을 입력하세요... (예: RSI가 뭐야?)"):
-            genai.configure(api_key=api_key)
+        # 2. Base64 변환
+        img_hamb = get_image_base64_from_url(url_hamb)
+        img_home = get_image_base64_from_url(url_home)
+        img_plus = get_image_base64_from_url(url_plus)
+        
+        images = [img for img in [img_hamb, img_home, img_plus] if img is not None]
 
-            st.session_state.messages.append({"role": "user", "content": prompt})
-            st.chat_message("user").write(prompt)
+        if images:
+            # 3. 클릭 가능한 이미지 생성
+            clicked = clickable_images(
+                paths=images, 
+                titles=["메뉴", "홈으로 가기", "새 분석 추가"],
+                div_style={
+                    "display": "flex", 
+                    "flex-direction": "column", 
+                    "align-items": "center", 
+                    "justify-content": "start", 
+                    "gap": "15px",
+                    "background-color": "#2B2D3E", # 사이드바 배경색과 일치
+                    "padding": "10px"
+                }, 
+                img_style={
+                    "margin": "5px", 
+                    "height": "30px", 
+                    "cursor": "pointer"
+                }, 
+                key=str(st.session_state.menu_key) 
+            )
 
-            try:
-                with st.spinner("Gemini가 분석 중입니다..."):
-                    # --- 여기서 system_instruction은 모델 생성 시에만 전달 ---
-                    system_instruction_text = (
-                        "당신은 금융 및 주식 시장 분석에 특화된 유능한 Gemini AI 어시스턴트입니다. "
-                        "친절하고 정확하게 답변하며, 질문에 대한 구체적인 근거와 설명을 제공합니다. "
-                        "한국어로 대화하며, 전문 용어는 쉽게 풀어서 설명해주고, "
-                        "투자 권유가 아닌 정보 제공임을 명시합니다."
-                    )
-
-                    model = genai.GenerativeModel(
-                        model_name='gemini-2.5-flash',
-                        system_instruction=system_instruction_text
-                    )
-
-                    history_for_api = [
-                        {
-                            "role": m['role'].replace('assistant', 'model'),
-                            "parts": [{"text": m['content']}]
-                        }
-                        for m in st.session_state.messages
-                    ]
-
-                    # generate_content에는 system_instruction 인자를 전달하지 않음
-                    response = model.generate_content(history_for_api)
-                    ai_msg = response.text
-
-                    st.session_state.messages.append({"role": "assistant", "content": ai_msg})
-                    st.chat_message("assistant", avatar="🤖").write(ai_msg)
-
-                    # 현재 대화 구조 업데이트
-                    st.session_state.chat_history[cur_id]["messages"] = st.session_state.messages
-                    st.session_state.chat_history[cur_id]["created_at"] = datetime.now().strftime("%Y-%m-%d %H:%M")
-
-                    # 제목 자동 변경
-                    if (
-                        st.session_state.chat_history[cur_id]["title"].startswith("새 대화")
-                        and len([m for m in st.session_state.messages if m["role"] == "user"]) == 1
-                    ):
-                        first_user_msg = [m for m in st.session_state.messages if m["role"] == "user"][0]["content"]
-                        new_title = first_user_msg[:20] + ("..." if len(first_user_msg) > 20 else "")
-                        st.session_state.chat_history[cur_id]["title"] = new_title
-                        st.session_state.chat_title = new_title
-
-                    save_chat_history(st.session_state.chat_store)
+            # 4. 클릭 이벤트 처리
+            if clicked > -1:
+                st.session_state.menu_key += 1 # 컴포넌트 리셋
+                
+                if clicked == 1: # 홈
+                    st.session_state.current_page_id = "HOME"
+                    st.rerun()
+                    
+                elif clicked == 2: # 추가
+                    new_id = str(uuid.uuid4())
+                    new_title = f"분석 리포트 {len(st.session_state.analysis_pages) + 1}"
+                    
+                    st.session_state.analysis_pages.append({
+                        "id": new_id,
+                        "title": new_title,
+                        "ticker": None # 아직 종목 선택 안됨
+                    })
+                    
+                    st.session_state.current_page_id = new_id
                     st.rerun()
 
-            except Exception as e:
-                st.error(f"오류가 발생했습니다: {e}")
-                st.session_state.messages.pop()
+        st.divider()
 
-# ----------------------------------------------------------------------
-# 11. 푸터
-# ----------------------------------------------------------------------
-st.markdown(
-    """
-    <div class="app-footer">
-        본 서비스는 학습·연구용 데모이며, 실제 투자 의사결정에 사용하기 전 반드시 별도의 검증이 필요합니다.
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+        # 5. 생성된 리포트 목록 표시
+        st.caption("📑 생성된 리포트 목록")
+        
+        if not st.session_state.analysis_pages:
+            st.info("생성된 분석 페이지가 없습니다.")
+        
+        for page in st.session_state.analysis_pages:
+            # 현재 선택된 페이지 강조
+            btn_type = "primary" if st.session_state.current_page_id == page["id"] else "secondary"
+            
+            # 버튼 클릭 시 해당 페이지로 이동
+            if st.button(page["title"], key=page["id"], type=btn_type, use_container_width=True):
+                st.session_state.current_page_id = page["id"]
+                st.rerun()
+        
+        # 6. 초기화 버튼
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("모든 페이지 초기화", type="secondary", use_container_width=True):
+            st.session_state.analysis_pages = []
+            st.session_state.current_page_id = "HOME"
+            st.session_state.menu_key += 1
+            st.rerun()
+
+
+# =========================
+# 6. 메인 실행 루프
+# =========================
+
+# 세션 초기화
+if "analysis_pages" not in st.session_state:
+    st.session_state.analysis_pages = []
+if "current_page_id" not in st.session_state:
+    st.session_state.current_page_id = "HOME"
+if "menu_key" not in st.session_state:
+    st.session_state.menu_key = 0
+
+# 1. 사이드바 렌더링 (항상 표시)
+render_sidebar()
+
+# 2. 메인 콘텐츠 라우팅
+if st.session_state.current_page_id == "HOME":
+    render_home()
+else:
+    render_analysis(st.session_state.current_page_id)
+
+# 3. 챗봇 (항상 표시)
+# (render_floating_chatbot 함수는 위 코드에 포함되어 있다고 가정)
+# (app1.py 맨 마지막 줄에 추가)
+render_floating_chatbot()

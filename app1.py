@@ -9,6 +9,7 @@ import altair as alt
 import ta
 import os 
 import uuid
+import base64  
 
 # --------- Naver news crawler dependencies
 import re
@@ -167,7 +168,7 @@ ALL_POPULAR_STOCKS = [
 if "popular_indices" not in st.session_state:
     st.session_state.popular_indices = list(range(len(ALL_POPULAR_STOCKS)))
 
-@st.cache_data
+@st.cache_data(ttl=600, max_entries=20)
 def load_data(ticker, start_date, end_date):
     try:
         df = fdr.DataReader(ticker, start_date, end_date)
@@ -516,7 +517,7 @@ def extract_news_content(url: str, session: requests.Session) -> Tuple[str, str,
     
     return company, title, "", date
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=600, max_entries=5)
 def get_popular_news() -> List[Dict[str, str]]:
     query = "증시"
     today = datetime.today().strftime("%Y.%m.%d")
